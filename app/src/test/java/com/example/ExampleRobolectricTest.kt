@@ -39,6 +39,30 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun `whatsapp package detector identifies standard packages`() {
+        val messengerPkg = com.example.data.model.SettingsData.PACKAGE_WHATSAPP
+        val businessPkg = com.example.data.model.SettingsData.PACKAGE_WHATSAPP_BUSINESS
+        
+        assertEquals("com.whatsapp", messengerPkg)
+        assertEquals("com.whatsapp.w4b", businessPkg)
+        
+        assertTrue(com.example.service.WhatsAppPackageDetector.isPackageAllowed("com.whatsapp", "both"))
+        assertTrue(com.example.service.WhatsAppPackageDetector.isPackageAllowed("com.whatsapp.w4b", "both"))
+        assertFalse(com.example.service.WhatsAppPackageDetector.isPackageAllowed("com.facebook.katana", "both"))
+        assertTrue(com.example.service.WhatsAppPackageDetector.isPackageAllowed("com.whatsapp", messengerPkg))
+        assertFalse(com.example.service.WhatsAppPackageDetector.isPackageAllowed("com.whatsapp.w4b", messengerPkg))
+    }
+
+    @Test
+    fun `notification parser filters out system and call messages`() {
+        assertTrue(com.example.service.NotificationParser.isSystemOrCallMessage("Calling...", null))
+        assertTrue(com.example.service.NotificationParser.isSystemOrCallMessage("Missed voice call", null))
+        assertTrue(com.example.service.NotificationParser.isSystemOrCallMessage("Checking for new messages", null))
+        assertTrue(com.example.service.NotificationParser.isSystemOrCallMessage("WhatsApp Web is currently active", null))
+        assertFalse(com.example.service.NotificationParser.isSystemOrCallMessage("Hey, what are you doing?", "Alex"))
+    }
+
+    @Test
     fun `mask key utility properly hides sensitive characters`() {
         val emptyMasked = SecureKeyStorage.maskKey("")
         assertEquals("Not configured", emptyMasked)

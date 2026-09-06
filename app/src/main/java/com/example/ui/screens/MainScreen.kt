@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,17 +22,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.StopCircle
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -39,6 +43,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,6 +55,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SuggestionChip
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -77,6 +83,7 @@ import com.example.ui.ReplyMateViewModel
 import com.example.ui.components.NotificationAccessBanner
 import com.example.ui.components.PendingApprovalCard
 import com.example.ui.theme.AlertAmber
+import com.example.ui.theme.AlertGreen
 import com.example.ui.theme.AlertRed
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -87,7 +94,9 @@ import java.util.Locale
 fun MainScreen(
     uiState: ReplyMateUiState,
     viewModel: ReplyMateViewModel,
-    onNavigateToSettings: () -> Unit
+    onNavigateToSettings: () -> Unit,
+    onNavigateToDiagnostics: () -> Unit,
+    onOpenAiWizard: () -> Unit
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -102,6 +111,17 @@ fun MainScreen(
     var simMessageInput by remember { mutableStateOf("Hey! Are you free for a quick call?") }
     var unlockPinInput by remember { mutableStateOf("") }
     var pinError by remember { mutableStateOf(false) }
+    var selectedLogFilter by remember { mutableStateOf("ALL") }
+
+    val filteredLogs = remember(uiState.recentLogs, selectedLogFilter) {
+        when (selectedLogFilter) {
+            "RECEIVED" -> uiState.recentLogs.filter { it.status == ReplyLogEntity.STATUS_RECEIVED || it.status == ReplyLogEntity.STATUS_PARSED }
+            "SENT" -> uiState.recentLogs.filter { it.status == ReplyLogEntity.STATUS_AUTO_SENT || it.status == ReplyLogEntity.STATUS_MANUAL_SENT }
+            "APPROVAL" -> uiState.recentLogs.filter { it.status == ReplyLogEntity.STATUS_APPROVAL_REQUIRED }
+            "IGNORED" -> uiState.recentLogs.filter { it.status == ReplyLogEntity.STATUS_IGNORED || it.status == ReplyLogEntity.STATUS_SENSITIVE }
+            else -> uiState.recentLogs
+        }
+    }
 
     // App Lock Overlay if active
     if (uiState.isAppLocked) {
@@ -215,7 +235,7 @@ fun MainScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "WhatsApp AI Assistant",
+                                text = "Personal WhatsApp AI Assistant",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -223,6 +243,16 @@ fun MainScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = onNavigateToDiagnostics,
+                        modifier = Modifier.testTag("top_diagnostics_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BugReport,
+                            contentDescription = "Diagnostics",
+                            tint = if (uiState.isServiceConnected) MaterialTheme.colorScheme.primary else AlertAmber
+                        )
+                    }
                     IconButton(
                         onClick = onNavigateToSettings,
                         modifier = Modifier.testTag("settings_icon_button")
@@ -246,7 +276,7 @@ fun MainScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 1. Notification Access Banner
+            // 1. Notification Access Banner (if missing)
             item {
                 NotificationAccessBanner(
                     isConnected = uiState.isNotificationAccessGranted,
@@ -254,13 +284,15 @@ fun MainScreen(
                 )
             }
 
-            // 2. Emergency Kill Switch Banner (if active) or Quick Button
+            // 2. Emergency Kill Switch Banner (if active)
             if (uiState.settings.emergencyKillSwitch) {
                 item {
                     Card(
                         shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(containerColor = AlertRed),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("emergency_stop_banner")
                     ) {
                         Row(
                             modifier = Modifier.padding(16.dp),
@@ -269,12 +301,12 @@ fun MainScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "EMERGENCY KILL SWITCH ACTIVE",
+                                    text = "EMERGENCY STOP ACTIVE",
                                     color = MaterialTheme.colorScheme.onError,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "All auto-replies are strictly blocked.",
+                                    text = "Auto-replies stopped & queue cleared. Safe state confirmed.",
                                     color = MaterialTheme.colorScheme.onError.copy(alpha = 0.9f),
                                     style = MaterialTheme.typography.bodySmall
                                 )
@@ -290,7 +322,7 @@ fun MainScreen(
                 }
             }
 
-            // 3. Large Status Indicator Card
+            // 3. Hero Status Card
             item {
                 val isAutoReplyOn = uiState.settings.aiAutoReplyEnabled && !uiState.settings.emergencyKillSwitch
                 Card(
@@ -333,7 +365,7 @@ fun MainScreen(
                                     text = if (isAutoReplyOn) {
                                         "Listening to WhatsApp notifications and ready to reply"
                                     } else {
-                                        "Assistant is paused. Tap to enable auto-replies."
+                                        "Assistant is paused. Toggle switch to start auto-replies."
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (isAutoReplyOn) {
@@ -357,16 +389,76 @@ fun MainScreen(
 
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        // Emergency Kill Switch Toggle Button
-                        if (!uiState.settings.emergencyKillSwitch) {
-                            OutlinedButton(
-                                onClick = { viewModel.toggleEmergencyKillSwitch(true) },
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = AlertRed),
-                                modifier = Modifier.fillMaxWidth()
+                        // Status indicators: Service State & Target WhatsApp
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Listener Service State
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (uiState.isServiceConnected) AlertGreen.copy(alpha = 0.15f) else AlertAmber.copy(alpha = 0.15f),
+                                modifier = Modifier.clickable {
+                                    if (!uiState.isServiceConnected) viewModel.forceRebindService()
+                                }
                             ) {
-                                Icon(Icons.Default.StopCircle, contentDescription = "Emergency Kill", tint = AlertRed)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (uiState.isServiceConnected) Icons.Default.CheckCircle else Icons.Default.Sync,
+                                        contentDescription = null,
+                                        tint = if (uiState.isServiceConnected) AlertGreen else AlertAmber,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (uiState.isServiceConnected) "Service: Active" else "Service: Tap to Reconnect",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (uiState.isServiceConnected) AlertGreen else AlertAmber
+                                    )
+                                }
+                            }
+
+                            // WhatsApp Package Target
+                            val pkgLabel = when (uiState.settings.selectedWhatsAppPackage) {
+                                SettingsData.PACKAGE_WHATSAPP -> "Messenger"
+                                SettingsData.PACKAGE_WHATSAPP_BUSINESS -> "Business"
+                                else -> "Both Messenger & Business"
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
+                            ) {
+                                Text(
+                                    text = "Target: $pkgLabel",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // EMERGENCY STOP Button (Section 21)
+                        if (!uiState.settings.emergencyKillSwitch) {
+                            Button(
+                                onClick = { viewModel.emergencyStop() },
+                                colors = ButtonDefaults.buttonColors(containerColor = AlertRed),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(46.dp)
+                                    .testTag("emergency_stop_button")
+                            ) {
+                                Icon(Icons.Default.StopCircle, contentDescription = "Stop", tint = MaterialTheme.colorScheme.onError)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Emergency: STOP AUTO REPLY")
+                                Text("STOP AUTO REPLY (EMERGENCY)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onError)
                             }
                         }
 
@@ -380,22 +472,17 @@ fun MainScreen(
                         )
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        // Status Info Chips / Metrics
+                        // Status Info Chips
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            // AI Provider Badge
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
                                     imageVector = Icons.Default.AutoAwesome,
                                     contentDescription = "Provider",
-                                    tint = if (isAutoReplyOn) {
-                                        MaterialTheme.colorScheme.onPrimaryContainer
-                                    } else {
-                                        MaterialTheme.colorScheme.primary
-                                    },
+                                    tint = if (isAutoReplyOn) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
@@ -406,16 +493,11 @@ fun MainScreen(
                                 )
                             }
 
-                            // Mode Badge
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
                                     imageVector = if (uiState.settings.approvalMode) Icons.Default.HourglassEmpty else Icons.Default.CheckCircle,
                                     contentDescription = "Mode",
-                                    tint = if (isAutoReplyOn) {
-                                        MaterialTheme.colorScheme.onPrimaryContainer
-                                    } else {
-                                        MaterialTheme.colorScheme.primary
-                                    },
+                                    tint = if (isAutoReplyOn) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
@@ -426,23 +508,52 @@ fun MainScreen(
                                 )
                             }
 
-                            // Today count
                             Text(
-                                text = "${uiState.todayReplyCount} replies today",
+                                text = "${uiState.todayReplyCount} today",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = if (isAutoReplyOn) {
-                                    MaterialTheme.colorScheme.onPrimaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                }
+                                color = if (isAutoReplyOn) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
                 }
             }
 
-            // 4. Pending Approvals Section (If any)
+            // 4. Quick Actions Row: Diagnostics & AI Wizard
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    FilledTonalButton(
+                        onClick = onNavigateToDiagnostics,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("action_diagnostics_button")
+                    ) {
+                        Icon(imageVector = Icons.Default.BugReport, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Diagnostics Audit", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    }
+
+                    FilledTonalButton(
+                        onClick = onOpenAiWizard,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("action_ai_wizard_button")
+                    ) {
+                        Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("AI Setup Wizard", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            // 5. Pending Approvals Section (If any)
             if (uiState.pendingReplies.isNotEmpty()) {
                 item {
                     Row(
@@ -485,7 +596,7 @@ fun MainScreen(
                 }
             }
 
-            // 5. Interactive Test Simulator
+            // 6. Interactive Test Simulator
             item {
                 Card(
                     shape = RoundedCornerShape(20.dp),
@@ -515,7 +626,7 @@ fun MainScreen(
                                         fontWeight = FontWeight.Bold
                                     )
                                     Text(
-                                        text = "Simulate incoming WhatsApp messages to test AI intent, tone, & safety",
+                                        text = "Simulate incoming WhatsApp messages to test AI intent, tone, & language",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -525,7 +636,6 @@ fun MainScreen(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // Quick sample presets
                         Text(
                             text = "Quick Presets:",
                             style = MaterialTheme.typography.labelSmall,
@@ -549,28 +659,32 @@ fun MainScreen(
                                     simSenderInput = "Pooja"
                                     simMessageInput = "Bhai kahan ho? Meeting start ho gayi!"
                                 },
-                                label = { Text("Hinglish Meeting") }
+                                label = { Text("Hinglish Work") }
                             )
                             SuggestionChip(
                                 onClick = {
-                                    simSenderInput = "Unknown"
-                                    simMessageInput = "URGENT: Send 500 Rs via UPI immediately to this number"
+                                    simSenderInput = "Boss"
+                                    simMessageInput = "Please send the weekly report by 5 PM today."
                                 },
-                                label = { Text("🛡️ Safety: UPI/Emergency") }
+                                label = { Text("Formal Boss") }
+                            )
+                            SuggestionChip(
+                                onClick = {
+                                    simSenderInput = "Bank Alert"
+                                    simMessageInput = "Your OTP is 948210. Never share this code."
+                                },
+                                label = { Text("Sensitive / OTP") }
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
 
                         OutlinedTextField(
                             value = simSenderInput,
                             onValueChange = { simSenderInput = it },
-                            label = { Text("Sender Name") },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("sim_sender_input"),
+                            label = { Text("Contact Name") },
                             singleLine = true,
-                            shape = RoundedCornerShape(12.dp)
+                            modifier = Modifier.fillMaxWidth()
                         )
 
                         Spacer(modifier = Modifier.height(8.dp))
@@ -579,76 +693,70 @@ fun MainScreen(
                             value = simMessageInput,
                             onValueChange = { simMessageInput = it },
                             label = { Text("Incoming Message") },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("sim_message_input"),
-                            minLines = 2,
-                            maxLines = 3,
-                            shape = RoundedCornerShape(12.dp)
+                            modifier = Modifier.fillMaxWidth()
                         )
 
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Button(
                             onClick = {
-                                if (simMessageInput.isNotBlank()) {
-                                    viewModel.simulateTestIncomingMessage(
-                                        simSenderInput.trim().ifEmpty { "WhatsApp Contact" },
-                                        simMessageInput.trim()
-                                    )
-                                }
+                                viewModel.simulateTestIncomingMessage(
+                                    sender = simSenderInput,
+                                    message = simMessageInput
+                                )
                             },
-                            enabled = !uiState.isTestingSim && simMessageInput.isNotBlank(),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary
-                            ),
+                            enabled = !uiState.isTestingSim && simSenderInput.isNotBlank() && simMessageInput.isNotBlank(),
+                            shape = RoundedCornerShape(10.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .testTag("simulate_test_button")
+                                .height(46.dp)
+                                .testTag("run_simulation_button")
                         ) {
                             if (uiState.isTestingSim) {
                                 CircularProgressIndicator(
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Generating AI Reply...")
+                                Text("Analyzing & Generating...")
                             } else {
-                                Icon(
-                                    imageVector = Icons.Default.AutoAwesome,
-                                    contentDescription = "Simulate",
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Simulate Incoming Message")
+                                Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Run Simulation Test")
                             }
                         }
 
-                        // Display simulation result
                         AnimatedVisibility(visible = uiState.testSimResult != null) {
-                            uiState.testSimResult?.let { resultText ->
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(top = 12.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                                        .padding(12.dp)
-                                ) {
-                                    Column {
+                            Card(
+                                shape = RoundedCornerShape(10.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 10.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
                                         Text(
-                                            text = resultText,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurface
+                                            text = "Simulation Result",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold
                                         )
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        Text(
-                                            text = "Tap Pending Approvals above to review, edit, or test-send.",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
+                                        IconButton(onClick = { viewModel.clearSimResult() }, modifier = Modifier.size(20.dp)) {
+                                            Icon(imageVector = Icons.Default.Refresh, contentDescription = "Clear", modifier = Modifier.size(14.dp))
+                                        }
                                     }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = uiState.testSimResult ?: "",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
                                 }
                             }
                         }
@@ -656,7 +764,7 @@ fun MainScreen(
                 }
             }
 
-            // 6. Recent Activity Logs Section
+            // 7. Recent Activity Logs Section with Filters
             item {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -672,7 +780,7 @@ fun MainScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Recent Reply Activity",
+                            text = "Recent Activity",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -690,7 +798,25 @@ fun MainScreen(
                 }
             }
 
-            if (uiState.recentLogs.isEmpty()) {
+            // Activity Log Filter Chips
+            item {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    val filters = listOf("ALL", "RECEIVED", "SENT", "APPROVAL", "IGNORED")
+                    filters.forEach { filter ->
+                        FilterChip(
+                            selected = selectedLogFilter == filter,
+                            onClick = { selectedLogFilter = filter },
+                            label = { Text(filter) }
+                        )
+                    }
+                }
+            }
+
+            if (filteredLogs.isEmpty()) {
                 item {
                     Box(
                         modifier = Modifier
@@ -709,12 +835,12 @@ fun MainScreen(
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "No replies generated yet",
+                                text = "No recent activity matching filter",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = "Activity will show here when WhatsApp notifications arrive",
+                                text = "Incoming WhatsApp notifications will appear here in real-time",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             )
@@ -722,7 +848,7 @@ fun MainScreen(
                     }
                 }
             } else {
-                items(uiState.recentLogs.take(20), key = { it.id }) { log ->
+                items(filteredLogs.take(25), key = { it.id }) { log ->
                     ActivityLogItem(log = log)
                 }
             }
@@ -740,15 +866,21 @@ fun ActivityLogItem(
     modifier: Modifier = Modifier
 ) {
     val timeFormatted = remember(log.timestamp) {
-        SimpleDateFormat("MMM dd, hh:mm a", Locale.getDefault()).format(Date(log.timestamp))
+        SimpleDateFormat("MMM dd, hh:mm:ss a", Locale.getDefault()).format(Date(log.timestamp))
     }
 
     val (statusLabel, statusColor) = when (log.status) {
-        ReplyLogEntity.STATUS_AUTO_SENT -> "Auto-Sent" to MaterialTheme.colorScheme.primary
-        ReplyLogEntity.STATUS_MANUAL_SENT -> "Manual Sent" to MaterialTheme.colorScheme.primary
+        ReplyLogEntity.STATUS_RECEIVED -> "Received" to AlertGreen
+        ReplyLogEntity.STATUS_PARSED -> "Parsed" to MaterialTheme.colorScheme.primary
+        ReplyLogEntity.STATUS_PROCESSING -> "Processing" to MaterialTheme.colorScheme.primary
+        ReplyLogEntity.STATUS_APPROVAL_REQUIRED -> "Approval Required" to AlertAmber
+        ReplyLogEntity.STATUS_AUTO_SENT -> "Auto-Sent" to AlertGreen
+        ReplyLogEntity.STATUS_MANUAL_SENT -> "Manual Sent" to AlertGreen
         ReplyLogEntity.STATUS_SENSITIVE -> "Protected (Sensitive)" to AlertAmber
         ReplyLogEntity.STATUS_RATE_LIMITED -> "Rate Limited" to AlertAmber
-        else -> "Failed / Expired" to AlertRed
+        ReplyLogEntity.STATUS_IGNORED -> "Skipped / Rule" to AlertAmber
+        ReplyLogEntity.STATUS_NO_ACTION -> "No Reply Action" to AlertAmber
+        else -> "Failed" to AlertRed
     }
 
     Card(
@@ -796,7 +928,7 @@ fun ActivityLogItem(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "Reply: \"${log.replyText}\"",
+                text = log.replyText,
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface

@@ -26,29 +26,140 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
         }
     }
 
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        ServiceDiagnostics.onConnected()
+    }
+
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+        ServiceDiagnostics.onDisconnected()
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         super.onNotificationPosted(sbn)
         if (sbn == null) return
 
-        val app = ReplyMateApplication.instance
-        val settings = app.preferencesRepository.settingsFlow.value
+        val pkg = sbn.packageName ?: return
+        val isWhatsApp = pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b"
 
-        // Quick check: If AI Auto Reply is OFF or Kill Switch is ON, ignore immediately
-        if (!settings.aiAutoReplyEnabled || settings.emergencyKillSwitch) {
+        // Track notification in diagnostics
+        ServiceDiagnostics.onNotificationReceived(pkg, isWhatsApp)
+
+        if (!isWhatsApp) {
             return
         }
 
-        val parsed = NotificationParser.parse(sbn) ?: return
+        val app = ReplyMateApplication.instance
+        val settings = app.preferencesRepository.settingsFlow.value
 
-        // Cache reply action as soon as seen
-        if (parsed.replyAction != null && parsed.remoteInput != null) {
-            ReplySender.cacheAction(parsed.conversationKey, parsed.replyAction, parsed.remoteInput)
+        // Check if package is allowed based on user selection (Messenger / Business / Both)
+        if (!WhatsAppPackageDetector.isPackageAllowed(pkg, settings.selectedWhatsAppPackage)) {
+            ServiceDiagnostics.logEvent(
+                eventType = "WhatsApp Notification Filtered",
+                details = "Package $pkg not selected in Settings (Selected: ${settings.selectedWhatsAppPackage})",
+                isWhatsApp = true
+            )
+            return
         }
 
-        serviceScope.launch {
-            val contactRule = app.preferencesRepository.contactRulesFlow.value[parsed.senderName]
+        // Parse notification
+        val parsed = NotificationParser.parse(sbn, settings.selectedWhatsAppPackage)
+        if (parsed == null) {
+            ServiceDiagnostics.logEvent(
+                eventType = "WhatsApp Notification Skipped",
+                details = "No extractable chat text in notification from $pkg",
+                isWhatsApp = true
+            )
+            return
+        }
 
-            // 1. Evaluate smart rule evaluator (quiet hours, kill switch, whitelist, group modes)
+        // Self-sent outgoing message check
+        if (parsed.isSelfSent) {
+            ServiceDiagnostics.logEvent(
+                eventType = "WhatsApp Outgoing Message",
+                details = "Self-sent message detected ('${parsed.senderName}') — skipped",
+                isWhatsApp = true
+            )
+            return
+        }
+
+        // Update diagnostics with extracted info
+        ServiceDiagnostics.updateWhatsAppDetails(parsed.senderName, parsed.hasReplyAction)
+        ServiceDiagnostics.logEvent(
+            eventType = "WhatsApp Message Detected",
+            details = "Sender: Available ('${parsed.senderName}'), Text: Available, Action: ${if (parsed.hasReplyAction) "Available" else "Unavailable"}",
+            isWhatsApp = true,
+            senderAvailable = true,
+            messageAvailable = true,
+            hasReplyAction = parsed.hasReplyAction
+        )
+
+        // Cache reply action if available
+        if (parsed.hasReplyAction) {
+            ReplySender.cacheAction(
+                conversationKey = parsed.conversationKey,
+                action = parsed.replyAction!!,
+                remoteInput = parsed.remoteInput!!,
+                senderName = parsed.senderName
+            )
+        }
+
+        // Record incoming message received in Recent Activity logs
+        serviceScope.launch {
+            app.database.replyLogDao().insert(
+                ReplyLogEntity(
+                    senderName = parsed.senderName,
+                    incomingMessage = parsed.messageText,
+                    replyText = "WhatsApp notification received",
+                    timestamp = System.currentTimeMillis(),
+                    status = ReplyLogEntity.STATUS_RECEIVED,
+                    provider = settings.aiProvider
+                )
+            )
+
+            // 1. Emergency Stop Check
+            if (settings.emergencyKillSwitch) {
+                app.database.replyLogDao().insert(
+                    ReplyLogEntity(
+                        senderName = parsed.senderName,
+                        incomingMessage = parsed.messageText,
+                        replyText = "Auto-reply blocked: Emergency Stop is active",
+                        timestamp = System.currentTimeMillis(),
+                        status = ReplyLogEntity.STATUS_IGNORED,
+                        provider = settings.aiProvider
+                    )
+                )
+                ServiceDiagnostics.logEvent(
+                    eventType = "Message Ignored",
+                    details = "Emergency Stop is currently active",
+                    isWhatsApp = true
+                )
+                return@launch
+            }
+
+            // 2. AI Auto Reply Toggle Check
+            if (!settings.aiAutoReplyEnabled) {
+                app.database.replyLogDao().insert(
+                    ReplyLogEntity(
+                        senderName = parsed.senderName,
+                        incomingMessage = parsed.messageText,
+                        replyText = "Auto-reply skipped: AI Auto Reply is turned OFF",
+                        timestamp = System.currentTimeMillis(),
+                        status = ReplyLogEntity.STATUS_IGNORED,
+                        provider = settings.aiProvider
+                    )
+                )
+                ServiceDiagnostics.logEvent(
+                    eventType = "Message Ignored",
+                    details = "AI Auto Reply is turned OFF in Settings",
+                    isWhatsApp = true
+                )
+                return@launch
+            }
+
+            // 3. Contact & Group Rules Evaluation
+            val contactRule = app.preferencesRepository.contactRulesFlow.value[parsed.senderName]
             val eval = SmartRuleEvaluator.evaluate(
                 senderName = parsed.senderName,
                 isGroup = parsed.isGroup,
@@ -56,16 +167,48 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                 contactRule = contactRule
             )
             if (!eval.shouldProcess) {
+                val reason = eval.skipReason ?: "Filtered by smart rules"
+                app.database.replyLogDao().insert(
+                    ReplyLogEntity(
+                        senderName = parsed.senderName,
+                        incomingMessage = parsed.messageText,
+                        replyText = "Auto-reply skipped: $reason",
+                        timestamp = System.currentTimeMillis(),
+                        status = ReplyLogEntity.STATUS_IGNORED,
+                        provider = settings.aiProvider
+                    )
+                )
+                ServiceDiagnostics.logEvent(
+                    eventType = "Message Ignored",
+                    details = reason,
+                    isWhatsApp = true
+                )
                 return@launch
             }
 
-            // 2. Evaluate message filter (cooldown, loops, daily limits)
+            // 4. Message Filter (cooldown, loops, limits)
             val filterResult = app.messageFilter.evaluate(parsed, settings)
             if (filterResult is FilterResult.Blocked) {
+                val reason = filterResult.reason
+                app.database.replyLogDao().insert(
+                    ReplyLogEntity(
+                        senderName = parsed.senderName,
+                        incomingMessage = parsed.messageText,
+                        replyText = "Auto-reply skipped: $reason",
+                        timestamp = System.currentTimeMillis(),
+                        status = ReplyLogEntity.STATUS_IGNORED,
+                        provider = settings.aiProvider
+                    )
+                )
+                ServiceDiagnostics.logEvent(
+                    eventType = "Message Filtered",
+                    details = reason,
+                    isWhatsApp = true
+                )
                 return@launch
             }
 
-            // 3. Batching check: aggregate rapid-fire messages if enabled
+            // 5. Batching / Processing
             if (settings.smartBatchingEnabled && settings.batchWindowSeconds > 0) {
                 batcher?.addMessage(
                     conversationKey = parsed.conversationKey,
@@ -85,10 +228,9 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
             val settings = app.preferencesRepository.settingsFlow.value
             val contactRule = app.preferencesRepository.contactRulesFlow.value[senderName]
 
-            // Record processed message in anti-spam tracker
             app.messageFilter.recordProcessedMessage(conversationKey, messageText)
 
-            // Save incoming message to local short-term conversation context
+            // Save incoming message to local conversation history
             app.database.conversationMessageDao().insert(
                 ConversationMessageEntity(
                     conversationKey = conversationKey,
@@ -97,6 +239,12 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                     isFromMe = false,
                     timestamp = System.currentTimeMillis()
                 )
+            )
+
+            ServiceDiagnostics.logEvent(
+                eventType = "AI Processing Started",
+                details = "Analyzing message from '$senderName' with ${settings.aiProvider.uppercase()}",
+                isWhatsApp = true
             )
 
             // Check emergency / sensitive message protection
@@ -126,10 +274,15 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                         provider = settings.aiProvider
                     )
                 )
+                ServiceDiagnostics.logEvent(
+                    eventType = "Protected Message",
+                    details = reason,
+                    isWhatsApp = true
+                )
                 return@launch
             }
 
-            // Generate AI reply with full contact intelligence & pro engine
+            // Generate AI reply
             val aiResult = app.aiEngine.processIncomingMessage(
                 senderName = senderName,
                 conversationKey = conversationKey,
@@ -154,9 +307,25 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                             providerUsed = settings.aiProvider
                         )
                     )
+                    app.database.replyLogDao().insert(
+                        ReplyLogEntity(
+                            senderName = senderName,
+                            incomingMessage = messageText,
+                            replyText = "[Manual reply recommended: ${aiResult.reason}]",
+                            timestamp = System.currentTimeMillis(),
+                            status = ReplyLogEntity.STATUS_SENSITIVE,
+                            provider = settings.aiProvider
+                        )
+                    )
                 }
 
                 is AIReplyResult.Success -> {
+                    ServiceDiagnostics.logEvent(
+                        eventType = "AI Response Generated",
+                        details = "Reply generated (${aiResult.replyText.length} chars) via ${aiResult.provider}",
+                        isWhatsApp = true
+                    )
+
                     if (isApprovalMode) {
                         // APPROVAL MODE: User reviews & can regenerate / edit in app
                         val pendingId = app.database.pendingReplyDao().insert(
@@ -171,21 +340,60 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                             )
                         )
 
+                        app.database.replyLogDao().insert(
+                            ReplyLogEntity(
+                                senderName = senderName,
+                                incomingMessage = messageText,
+                                replyText = aiResult.replyText,
+                                timestamp = System.currentTimeMillis(),
+                                status = ReplyLogEntity.STATUS_APPROVAL_REQUIRED,
+                                provider = aiResult.provider
+                            )
+                        )
+
                         NotificationHelper.showApprovalNotification(
                             context = applicationContext,
                             pendingId = pendingId,
                             sender = senderName,
                             suggestedReply = aiResult.replyText
                         )
+                        ServiceDiagnostics.logEvent(
+                            eventType = "Approval Required",
+                            details = "Created pending card for review",
+                            isWhatsApp = true
+                        )
                     } else {
-                        // AUTO MODE: Send automatically after configured delay
+                        // AUTOMATIC MODE
+                        // Verify reply action is available
+                        val hasAction = ReplySender.hasCachedAction(conversationKey, senderName)
+                        if (!hasAction) {
+                            app.database.replyLogDao().insert(
+                                ReplyLogEntity(
+                                    senderName = senderName,
+                                    incomingMessage = messageText,
+                                    replyText = "[Automatic reply unavailable: WhatsApp notification did not provide a reply action]",
+                                    timestamp = System.currentTimeMillis(),
+                                    status = ReplyLogEntity.STATUS_NO_ACTION,
+                                    provider = aiResult.provider
+                                )
+                            )
+                            ServiceDiagnostics.logEvent(
+                                eventType = "Reply Action Missing",
+                                details = "Notification did not supply a RemoteInput reply action",
+                                isWhatsApp = true
+                            )
+                            return@launch
+                        }
+
+                        // Delay before sending
                         val delayMs = (settings.replyDelaySeconds * 1000L).coerceAtLeast(1000L)
                         delay(delayMs)
 
                         val sent = ReplySender.sendReply(
                             context = applicationContext,
                             conversationKey = conversationKey,
-                            replyText = aiResult.replyText
+                            replyText = aiResult.replyText,
+                            senderName = senderName
                         )
 
                         if (sent) {
@@ -202,7 +410,6 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                                 )
                             )
 
-                            // Add sent reply to context
                             app.database.conversationMessageDao().insert(
                                 ConversationMessageEntity(
                                     conversationKey = conversationKey,
@@ -212,16 +419,28 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                                     timestamp = System.currentTimeMillis()
                                 )
                             )
+
+                            ServiceDiagnostics.logEvent(
+                                eventType = "Reply Sent",
+                                details = "Auto-reply sent successfully to '$senderName'",
+                                isWhatsApp = true,
+                                hasReplyAction = true
+                            )
                         } else {
                             app.database.replyLogDao().insert(
                                 ReplyLogEntity(
                                     senderName = senderName,
                                     incomingMessage = messageText,
-                                    replyText = aiResult.replyText,
+                                    replyText = "[Failed to send via WhatsApp notification: ${aiResult.replyText}]",
                                     timestamp = System.currentTimeMillis(),
                                     status = ReplyLogEntity.STATUS_FAILED,
                                     provider = aiResult.provider
                                 )
+                            )
+                            ServiceDiagnostics.logEvent(
+                                eventType = "Reply Failed",
+                                details = "Failed to send Intent via WhatsApp RemoteInput",
+                                isWhatsApp = true
                             )
                         }
                     }
@@ -232,18 +451,19 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                         ReplyLogEntity(
                             senderName = senderName,
                             incomingMessage = messageText,
-                            replyText = "[Error: ${aiResult.errorMessage}]",
+                            replyText = "[AI Generation Error: ${aiResult.errorMessage}]",
                             timestamp = System.currentTimeMillis(),
                             status = ReplyLogEntity.STATUS_FAILED,
                             provider = settings.aiProvider
                         )
                     )
+                    ServiceDiagnostics.logEvent(
+                        eventType = "AI Generation Failed",
+                        details = aiResult.errorMessage,
+                        isWhatsApp = true
+                    )
                 }
             }
         }
-    }
-
-    override fun onNotificationRemoved(sbn: StatusBarNotification?) {
-        super.onNotificationRemoved(sbn)
     }
 }

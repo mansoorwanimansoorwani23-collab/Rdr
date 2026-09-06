@@ -15,8 +15,14 @@ import com.example.data.model.ContactRule
 import com.example.data.model.SettingsData
 import com.example.data.model.StyleAnalysis
 import com.example.data.security.SecureKeyStorage
+import com.example.service.DiagnosticItemResult
+import com.example.service.DiagnosticLogEntry
+import com.example.service.DiagnosticRunner
 import com.example.service.NotificationHelper
 import com.example.service.ReplySender
+import com.example.service.ServiceDiagnostics
+import com.example.service.WhatsAppInstallStatus
+import com.example.service.WhatsAppPackageDetector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,6 +33,7 @@ import java.util.Calendar
 data class ReplyMateUiState(
     val settings: SettingsData = SettingsData(),
     val isNotificationAccessGranted: Boolean = false,
+    val isServiceConnected: Boolean = false,
     val pendingReplies: List<PendingReplyEntity> = emptyList(),
     val recentLogs: List<ReplyLogEntity> = emptyList(),
     val todayReplyCount: Int = 0,
@@ -41,7 +48,15 @@ data class ReplyMateUiState(
     val userSampleMessages: List<String> = emptyList(),
     val styleAnalysis: StyleAnalysis = StyleAnalysis(),
     val allMemories: List<ContactMemoryEntity> = emptyList(),
-    val isAppLocked: Boolean = false
+    val isAppLocked: Boolean = false,
+
+    // Diagnostics state
+    val isDiagnosticsRunning: Boolean = false,
+    val diagnosticResults: List<DiagnosticItemResult> = emptyList(),
+    val diagnosticEvents: List<DiagnosticLogEntry> = emptyList(),
+    val whatsAppInstallStatus: WhatsAppInstallStatus = WhatsAppInstallStatus(false, false),
+    val keyVerificationStatus: String? = null,
+    val isVerifyingKey: Boolean = false
 )
 
 class ReplyMateViewModel(application: Application) : AndroidViewModel(application) {
@@ -56,12 +71,14 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
         ReplyMateUiState(
             settings = prefRepo.settingsFlow.value,
             isNotificationAccessGranted = NotificationHelper.isNotificationAccessGranted(app),
+            isServiceConnected = ServiceDiagnostics.isServiceConnected.value,
             geminiKeyMasked = SecureKeyStorage.maskKey(keyStorage.getGeminiApiKey()),
             openAiKeyMasked = SecureKeyStorage.maskKey(keyStorage.getOpenAiApiKey()),
             contactRules = prefRepo.contactRulesFlow.value,
             userSampleMessages = prefRepo.userSampleMessages.value,
             styleAnalysis = prefRepo.styleAnalysisFlow.value,
-            isAppLocked = prefRepo.settingsFlow.value.appLockEnabled
+            isAppLocked = prefRepo.settingsFlow.value.appLockEnabled,
+            whatsAppInstallStatus = WhatsAppPackageDetector.checkInstalledPackages(app)
         )
     )
     val uiState: StateFlow<ReplyMateUiState> = _uiState.asStateFlow()
@@ -122,6 +139,23 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
                 _uiState.update { it.copy(todayReplyCount = count) }
             }
         }
+
+        // Collect live diagnostic events
+        viewModelScope.launch {
+            ServiceDiagnostics.events.collect { evts ->
+                _uiState.update { it.copy(diagnosticEvents = evts) }
+            }
+        }
+
+        // Collect service connection state
+        viewModelScope.launch {
+            ServiceDiagnostics.isServiceConnected.collect { connected ->
+                _uiState.update { it.copy(isServiceConnected = connected) }
+            }
+        }
+
+        // Check WhatsApp installed apps
+        checkWhatsAppInstallations()
     }
 
     private fun getStartOfDay(): Long {
@@ -135,11 +169,48 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun refreshNotificationAccess() {
         val granted = NotificationHelper.isNotificationAccessGranted(app)
-        _uiState.update { it.copy(isNotificationAccessGranted = granted) }
+        val connected = ServiceDiagnostics.isServiceConnected.value
+        _uiState.update {
+            it.copy(
+                isNotificationAccessGranted = granted,
+                isServiceConnected = connected
+            )
+        }
     }
 
     fun openNotificationSettings() {
         NotificationHelper.openNotificationListenerSettings(app)
+    }
+
+    fun forceRebindService() {
+        val success = NotificationHelper.forceServiceRebind(app)
+        refreshNotificationAccess()
+        _uiState.update {
+            it.copy(
+                snackbarMessage = if (success) "Notification listener rebind requested from Android OS" else "Rebind request failed"
+            )
+        }
+        runFullDiagnostics()
+    }
+
+    fun checkWhatsAppInstallations() {
+        val status = WhatsAppPackageDetector.checkInstalledPackages(app)
+        _uiState.update { it.copy(whatsAppInstallStatus = status) }
+        // Auto-select installed WhatsApp if only one is installed and current is unconfigured
+        val current = prefRepo.settingsFlow.value
+        if (current.selectedWhatsAppPackage == "both") {
+            if (status.onlyMessenger) {
+                prefRepo.updateSettings(current.copy(selectedWhatsAppPackage = SettingsData.PACKAGE_WHATSAPP))
+            } else if (status.onlyBusiness) {
+                prefRepo.updateSettings(current.copy(selectedWhatsAppPackage = SettingsData.PACKAGE_WHATSAPP_BUSINESS))
+            }
+        }
+    }
+
+    fun setSelectedWhatsAppPackage(pkg: String) {
+        val current = prefRepo.settingsFlow.value
+        prefRepo.updateSettings(current.copy(selectedWhatsAppPackage = pkg))
+        _uiState.update { it.copy(snackbarMessage = "Target WhatsApp package updated") }
     }
 
     fun toggleAutoReply(enabled: Boolean) {
@@ -150,6 +221,17 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
         prefRepo.setEmergencyKillSwitch(kill)
         _uiState.update {
             it.copy(snackbarMessage = if (kill) "EMERGENCY: All Auto-Replies STOPPED immediately" else "Auto-Reply Resumed")
+        }
+    }
+
+    fun emergencyStop() {
+        viewModelScope.launch {
+            prefRepo.toggleAutoReply(false)
+            prefRepo.setEmergencyKillSwitch(true)
+            db.pendingReplyDao().clearAll()
+            _uiState.update {
+                it.copy(snackbarMessage = "EMERGENCY STOPPED: Auto-replies disabled & pending queue cleared.")
+            }
         }
     }
 
@@ -169,6 +251,37 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update { it.copy(snackbarMessage = "OpenAI API key saved securely in Keystore") }
     }
 
+    fun verifyAndSaveApiKey(provider: String, key: String, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isVerifyingKey = true, keyVerificationStatus = null) }
+            val testResult = aiEngine.verifyApiKey(provider, key)
+            if (testResult.isSuccess) {
+                if (provider == SettingsData.PROVIDER_GEMINI) {
+                    keyStorage.saveGeminiApiKey(key)
+                } else {
+                    keyStorage.saveOpenAiApiKey(key)
+                }
+                updateMaskedKeys()
+                _uiState.update {
+                    it.copy(
+                        isVerifyingKey = false,
+                        keyVerificationStatus = "Valid API Key verified successfully!",
+                        snackbarMessage = "$provider API key verified and saved."
+                    )
+                }
+                onSuccess()
+            } else {
+                val err = testResult.exceptionOrNull()?.message ?: "Verification failed"
+                _uiState.update {
+                    it.copy(
+                        isVerifyingKey = false,
+                        keyVerificationStatus = "Verification failed: $err"
+                    )
+                }
+            }
+        }
+    }
+
     fun clearApiKeys() {
         keyStorage.clearAllKeys()
         updateMaskedKeys()
@@ -182,6 +295,28 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
                 openAiKeyMasked = SecureKeyStorage.maskKey(keyStorage.getOpenAiApiKey())
             )
         }
+    }
+
+    // Diagnostics
+    fun runFullDiagnostics() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isDiagnosticsRunning = true) }
+            refreshNotificationAccess()
+            val results = DiagnosticRunner.runDiagnostics(app)
+            _uiState.update {
+                it.copy(
+                    isDiagnosticsRunning = false,
+                    diagnosticResults = results,
+                    isNotificationAccessGranted = NotificationHelper.isNotificationAccessGranted(app),
+                    isServiceConnected = ServiceDiagnostics.isServiceConnected.value
+                )
+            }
+        }
+    }
+
+    fun clearDiagnostics() {
+        ServiceDiagnostics.clear()
+        _uiState.update { it.copy(diagnosticEvents = emptyList(), snackbarMessage = "Diagnostics log cleared") }
     }
 
     // Contact Intelligence
@@ -271,7 +406,8 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
             val sent = ReplySender.sendReply(
                 context = app,
                 conversationKey = pending.conversationKey,
-                replyText = pending.suggestedReply
+                replyText = pending.suggestedReply,
+                senderName = pending.senderName
             )
 
             val status = if (sent) PendingReplyEntity.STATUS_SENT else "SENT_OFFLINE"
@@ -283,7 +419,7 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
                     incomingMessage = pending.incomingMessage,
                     replyText = pending.suggestedReply,
                     timestamp = System.currentTimeMillis(),
-                    status = ReplyLogEntity.STATUS_MANUAL_SENT,
+                    status = if (sent) ReplyLogEntity.STATUS_MANUAL_SENT else ReplyLogEntity.STATUS_NO_ACTION,
                     provider = pending.providerUsed
                 )
             )
@@ -301,7 +437,7 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
             _uiState.update {
                 it.copy(
                     snackbarMessage = if (sent) "Reply sent to ${pending.senderName}"
-                    else "Reply approved (Action expired or simulated)"
+                    else "Reply action expired in notification shade (WhatsApp notification dismissed)"
                 )
             }
         }
@@ -312,7 +448,8 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
             val sent = ReplySender.sendReply(
                 context = app,
                 conversationKey = pending.conversationKey,
-                replyText = editedReply
+                replyText = editedReply,
+                senderName = pending.senderName
             )
 
             db.pendingReplyDao().updateReplyText(
@@ -327,7 +464,7 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
                     incomingMessage = pending.incomingMessage,
                     replyText = editedReply,
                     timestamp = System.currentTimeMillis(),
-                    status = ReplyLogEntity.STATUS_MANUAL_SENT,
+                    status = if (sent) ReplyLogEntity.STATUS_MANUAL_SENT else ReplyLogEntity.STATUS_NO_ACTION,
                     provider = pending.providerUsed
                 )
             )
@@ -345,7 +482,7 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
             _uiState.update {
                 it.copy(
                     snackbarMessage = if (sent) "Edited reply sent to ${pending.senderName}"
-                    else "Edited reply approved"
+                    else "Reply action expired in notification shade"
                 )
             }
         }

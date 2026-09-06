@@ -16,6 +16,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.ReplyMateViewModel
+import com.example.ui.screens.AiWizardScreen
+import com.example.ui.screens.DiagnosticsScreen
 import com.example.ui.screens.MainScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.SettingsScreen
@@ -24,7 +26,9 @@ import com.example.ui.theme.MyApplicationTheme
 enum class Screen {
     MAIN,
     SETTINGS,
-    ONBOARDING
+    ONBOARDING,
+    DIAGNOSTICS,
+    AI_WIZARD
 }
 
 class MainActivity : ComponentActivity() {
@@ -71,14 +75,34 @@ fun ReplyMateApp(viewModel: ReplyMateViewModel) {
                 MainScreen(
                     uiState = uiState,
                     viewModel = viewModel,
-                    onNavigateToSettings = { currentScreen = Screen.SETTINGS }
+                    onNavigateToSettings = { currentScreen = Screen.SETTINGS },
+                    onNavigateToDiagnostics = { currentScreen = Screen.DIAGNOSTICS },
+                    onOpenAiWizard = { currentScreen = Screen.AI_WIZARD }
                 )
             }
             Screen.SETTINGS -> {
                 SettingsScreen(
                     uiState = uiState,
                     viewModel = viewModel,
-                    onBackClick = { currentScreen = Screen.MAIN }
+                    onBackClick = { currentScreen = Screen.MAIN },
+                    onNavigateToDiagnostics = { currentScreen = Screen.DIAGNOSTICS },
+                    onOpenAiWizard = { currentScreen = Screen.AI_WIZARD }
+                )
+            }
+            Screen.DIAGNOSTICS -> {
+                DiagnosticsScreen(
+                    uiState = uiState,
+                    viewModel = viewModel,
+                    onBackClick = { currentScreen = Screen.MAIN },
+                    onNavigateToSettings = { currentScreen = Screen.SETTINGS },
+                    onOpenAiWizard = { currentScreen = Screen.AI_WIZARD }
+                )
+            }
+            Screen.AI_WIZARD -> {
+                AiWizardScreen(
+                    uiState = uiState,
+                    viewModel = viewModel,
+                    onFinish = { currentScreen = Screen.MAIN }
                 )
             }
         }

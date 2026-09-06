@@ -134,6 +134,35 @@ class GeminiProvider(
         }
     }
 
+    suspend fun verifyKey(key: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        if (key.isBlank()) return@withContext Result.failure(IllegalArgumentException("API Key cannot be blank"))
+        try {
+            val testUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$key"
+            val requestJson = JSONObject().apply {
+                put("contents", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("parts", JSONArray().apply {
+                            put(JSONObject().put("text", "Hello"))
+                        })
+                    })
+                })
+            }
+            val requestBody = requestJson.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder().url(testUrl).post(requestBody).build()
+            httpClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Result.success(true)
+                } else {
+                    val code = response.code
+                    val msg = if (code == 400 || code == 403) "Invalid API key or quota exceeded ($code)" else "Error: HTTP $code"
+                    Result.failure(Exception(msg))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     private fun buildSystemPrompt(
         replyStyle: String,
         customInstructions: String,

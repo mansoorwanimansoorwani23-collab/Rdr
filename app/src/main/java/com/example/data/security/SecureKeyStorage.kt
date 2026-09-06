@@ -133,6 +133,10 @@ class SecureKeyStorage(private val context: Context) {
 
     fun hasOpenAiApiKey(): Boolean = getOpenAiApiKey().isNotBlank()
 
+    fun hasKey(provider: String): Boolean {
+        return if (provider == "gemini") hasGeminiApiKey() else hasOpenAiApiKey()
+    }
+
     fun clearAllKeys() {
         prefs.edit()
             .remove(PREF_KEY_GEMINI)

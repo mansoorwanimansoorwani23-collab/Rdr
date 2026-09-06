@@ -34,9 +34,14 @@ data class SettingsData(
     val appLockEnabled: Boolean = false,
     val appLockPin: String = "",
     val customNaturalLanguageRules: String = "", // e.g. "If anyone asks for dinner, say I am free after 8"
-    val smartFallbackEnabled: Boolean = true // Fallback to OpenAI if Gemini fails or vice-versa
+    val smartFallbackEnabled: Boolean = true, // Fallback to OpenAI if Gemini fails or vice-versa
+    val selectedWhatsAppPackage: String = PACKAGE_BOTH // "both", "com.whatsapp", or "com.whatsapp.w4b"
 ) {
     companion object {
+        const val PACKAGE_WHATSAPP = "com.whatsapp"
+        const val PACKAGE_WHATSAPP_BUSINESS = "com.whatsapp.w4b"
+        const val PACKAGE_BOTH = "both"
+
         const val PROVIDER_GEMINI = "gemini"
         const val PROVIDER_OPENAI = "openai"
 

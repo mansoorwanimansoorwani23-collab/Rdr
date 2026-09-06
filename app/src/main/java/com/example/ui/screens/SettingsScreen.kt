@@ -27,11 +27,14 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
@@ -40,6 +43,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -80,7 +84,9 @@ import kotlin.math.roundToInt
 fun SettingsScreen(
     uiState: ReplyMateUiState,
     viewModel: ReplyMateViewModel,
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    onNavigateToDiagnostics: () -> Unit = {},
+    onOpenAiWizard: () -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
 
@@ -140,6 +146,86 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // 0. Notification Diagnostics & WhatsApp App Target
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.BugReport,
+                                contentDescription = "Diagnostics",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Notification Diagnostics",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        FilledTonalButton(
+                            onClick = onNavigateToDiagnostics,
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Run Audit", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "Target WhatsApp Application",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        FilterChip(
+                            selected = settings.selectedWhatsAppPackage == "both",
+                            onClick = { viewModel.setSelectedWhatsAppPackage("both") },
+                            label = { Text("Both (Auto-Detect)") }
+                        )
+                        FilterChip(
+                            selected = settings.selectedWhatsAppPackage == SettingsData.PACKAGE_WHATSAPP,
+                            onClick = { viewModel.setSelectedWhatsAppPackage(SettingsData.PACKAGE_WHATSAPP) },
+                            label = { Text("WhatsApp Messenger") }
+                        )
+                        FilterChip(
+                            selected = settings.selectedWhatsAppPackage == SettingsData.PACKAGE_WHATSAPP_BUSINESS,
+                            onClick = { viewModel.setSelectedWhatsAppPackage(SettingsData.PACKAGE_WHATSAPP_BUSINESS) },
+                            label = { Text("WhatsApp Business") }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedButton(
+                        onClick = { viewModel.forceRebindService() },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(imageVector = Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Reconnect Notification Listener Service")
+                    }
+                }
+            }
+
             // 1. AI Provider & Keys Section
             Card(
                 shape = RoundedCornerShape(16.dp),
@@ -147,19 +233,32 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.AutoAwesome,
-                            contentDescription = "AI Engine",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "AI Engine & Multi-Provider",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = "AI Engine",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "AI Engine & Multi-Provider",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        FilledTonalButton(
+                            onClick = onOpenAiWizard,
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Setup Wizard", style = MaterialTheme.typography.labelSmall)
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))

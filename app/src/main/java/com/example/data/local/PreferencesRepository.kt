@@ -62,7 +62,8 @@ class PreferencesRepository(private val context: Context) {
             appLockEnabled = prefs.getBoolean(KEY_APP_LOCK_ENABLED, false),
             appLockPin = prefs.getString(KEY_APP_LOCK_PIN, "") ?: "",
             customNaturalLanguageRules = prefs.getString(KEY_NATURAL_RULES, "") ?: "",
-            smartFallbackEnabled = prefs.getBoolean(KEY_SMART_FALLBACK, true)
+            smartFallbackEnabled = prefs.getBoolean(KEY_SMART_FALLBACK, true),
+            selectedWhatsAppPackage = prefs.getString(KEY_SELECTED_PACKAGE, SettingsData.PACKAGE_BOTH) ?: SettingsData.PACKAGE_BOTH
         )
     }
 
@@ -101,6 +102,7 @@ class PreferencesRepository(private val context: Context) {
             .putString(KEY_APP_LOCK_PIN, newSettings.appLockPin)
             .putString(KEY_NATURAL_RULES, newSettings.customNaturalLanguageRules)
             .putBoolean(KEY_SMART_FALLBACK, newSettings.smartFallbackEnabled)
+            .putString(KEY_SELECTED_PACKAGE, newSettings.selectedWhatsAppPackage)
             .apply()
 
         _settingsFlow.value = newSettings
@@ -285,6 +287,7 @@ class PreferencesRepository(private val context: Context) {
         private const val KEY_APP_LOCK_PIN = "key_app_lock_pin"
         private const val KEY_NATURAL_RULES = "key_natural_rules"
         private const val KEY_SMART_FALLBACK = "key_smart_fallback"
+        private const val KEY_SELECTED_PACKAGE = "key_selected_whatsapp_package"
 
         private const val KEY_CONTACT_RULES_JSON = "key_contact_rules_json"
         private const val KEY_USER_SAMPLES_JSON = "key_user_samples_json"

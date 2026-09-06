@@ -9,19 +9,37 @@ import java.util.concurrent.ConcurrentHashMap
 
 object ReplySender {
 
-    // Cache active reply action per conversationKey
+    // Cache active reply action per conversationKey and senderName
     private val actionCache = ConcurrentHashMap<String, Pair<Notification.Action, RemoteInput>>()
 
-    fun cacheAction(conversationKey: String, action: Notification.Action, remoteInput: RemoteInput) {
-        actionCache[conversationKey] = Pair(action, remoteInput)
+    fun cacheAction(
+        conversationKey: String,
+        action: Notification.Action,
+        remoteInput: RemoteInput,
+        senderName: String? = null
+    ) {
+        val pair = Pair(action, remoteInput)
+        actionCache[conversationKey] = pair
+        if (!senderName.isNullOrBlank()) {
+            actionCache[senderName] = pair
+        }
     }
 
-    fun hasCachedAction(conversationKey: String): Boolean {
-        return actionCache.containsKey(conversationKey)
+    fun hasCachedAction(conversationKey: String, senderName: String? = null): Boolean {
+        if (actionCache.containsKey(conversationKey)) return true
+        if (!senderName.isNullOrBlank() && actionCache.containsKey(senderName)) return true
+        return false
     }
 
-    fun removeAction(conversationKey: String) {
+    fun anyCachedActionAvailable(): Boolean {
+        return actionCache.isNotEmpty()
+    }
+
+    fun removeAction(conversationKey: String, senderName: String? = null) {
         actionCache.remove(conversationKey)
+        if (!senderName.isNullOrBlank()) {
+            actionCache.remove(senderName)
+        }
     }
 
     fun sendReply(
@@ -29,12 +47,13 @@ object ReplySender {
         conversationKey: String,
         replyText: String,
         action: Notification.Action? = null,
-        remoteInput: RemoteInput? = null
+        remoteInput: RemoteInput? = null,
+        senderName: String? = null
     ): Boolean {
         val targetPair = if (action != null && remoteInput != null) {
             Pair(action, remoteInput)
         } else {
-            actionCache[conversationKey]
+            actionCache[conversationKey] ?: (!senderName.isNullOrBlank()).let { actionCache[senderName] }
         } ?: return false
 
         val targetAction = targetPair.first

@@ -6,8 +6,10 @@ import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
+import android.service.notification.NotificationListenerService
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.example.MainActivity
@@ -19,6 +21,34 @@ object NotificationHelper {
     fun isNotificationAccessGranted(context: Context): Boolean {
         val enabledPackages = NotificationManagerCompat.getEnabledListenerPackages(context)
         return enabledPackages.contains(context.packageName)
+    }
+
+    fun isServiceConnected(): Boolean {
+        return ServiceDiagnostics.isServiceConnected.value
+    }
+
+    fun forceServiceRebind(context: Context): Boolean {
+        return try {
+            val componentName = ComponentName(context, WhatsAppNotificationListenerService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                NotificationListenerService.requestRebind(componentName)
+            }
+            // Toggle component enabled setting to trigger Android OS listener rebind
+            val pm = context.packageManager
+            pm.setComponentEnabledSetting(
+                componentName,
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                PackageManager.DONT_KILL_APP
+            )
+            pm.setComponentEnabledSetting(
+                componentName,
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                PackageManager.DONT_KILL_APP
+            )
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     fun openNotificationListenerSettings(context: Context) {
@@ -64,7 +94,7 @@ object NotificationHelper {
 
         val builder = NotificationCompat.Builder(context, CHANNEL_APPROVAL)
             .setSmallIcon(android.R.drawable.ic_dialog_email)
-            .setContentTitle("ReplyMate: Reply ready for $sender")
+            .setContentTitle("Reply ready for $sender")
             .setContentText(suggestedReply)
             .setStyle(NotificationCompat.BigTextStyle().bigText("Suggested reply to $sender:\n\"$suggestedReply\""))
             .setPriority(NotificationCompat.PRIORITY_HIGH)

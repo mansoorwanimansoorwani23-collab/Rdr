@@ -68,9 +68,10 @@ class MessageFilter(private val database: AppDatabase) {
             return FilterResult.Blocked("Duplicate notification detected.")
         }
 
-        // 6. Anti-spam cooldown per conversation (minimum 10 seconds between processing)
-        if (now - lastTimestamp < 10_000L) {
-            return FilterResult.Blocked("Cooldown active for this conversation.")
+        // 6. Anti-spam cooldown per conversation
+        val cooldownMs = (settings.conversationCooldownSeconds * 1000L).coerceAtLeast(5_000L)
+        if (now - lastTimestamp < cooldownMs) {
+            return FilterResult.Blocked("Cooldown active for this conversation (${cooldownMs / 1000}s).")
         }
 
         // 7. Loop prevention: check max consecutive replies

@@ -30,6 +30,13 @@ class AIEngine(
         }
     }
 
+    suspend fun verifyApiKey(providerId: String, key: String): Result<Boolean> {
+        return when (providerId.lowercase()) {
+            "openai" -> openAIProvider.verifyKey(key)
+            else -> geminiProvider.verifyKey(key)
+        }
+    }
+
     suspend fun processIncomingMessage(
         senderName: String,
         conversationKey: String,

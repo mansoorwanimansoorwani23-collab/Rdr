@@ -19,4 +19,5 @@ val EmeraldDarkSecondary = Color(0xFF80E8BA)
 val AlertAmber = Color(0xFFF59E0B)
 val AlertRed = Color(0xFFEF4444)
 val AlertRedContainer = Color(0xFFFEE2E2)
+val AlertGreen = Color(0xFF10B981)
 

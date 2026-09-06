@@ -123,6 +123,39 @@ class OpenAIProvider(
         }
     }
 
+    suspend fun verifyKey(key: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        if (key.isBlank()) return@withContext Result.failure(IllegalArgumentException("API Key cannot be blank"))
+        try {
+            val requestJson = JSONObject().apply {
+                put("model", "gpt-4o-mini")
+                put("messages", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("content", "Hello")
+                    })
+                })
+                put("max_tokens", 5)
+            }
+            val requestBody = requestJson.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url("https://api.openai.com/v1/chat/completions")
+                .addHeader("Authorization", "Bearer $key")
+                .post(requestBody)
+                .build()
+            httpClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Result.success(true)
+                } else {
+                    val code = response.code
+                    val msg = if (code == 401) "Invalid OpenAI API key ($code)" else "Error: HTTP $code"
+                    Result.failure(Exception(msg))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     private fun buildSystemPrompt(
         replyStyle: String,
         customInstructions: String,
