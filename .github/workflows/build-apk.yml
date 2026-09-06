@@ -174,19 +174,24 @@ jobs:
 
           echo "Creating GitHub Release with tag: $RELEASE_TAG and target: $TARGET_COMMIT"
 
+          NOTES_FILE="${{ runner.temp }}/release_notes.md"
+          {
+            echo "### Debug APK Build Details"
+            echo ""
+            echo "- **Type**: Automatically generated debug APK"
+            echo "- **Builder**: GitHub Actions"
+            echo "- **Run Number**: #${{ github.run_number }}"
+            echo "- **Run Attempt**: ${{ github.run_attempt }}"
+            echo "- **Source Commit**: \`${TARGET_COMMIT}\`"
+            echo "- **Purpose**: This APK is intended for testing and development preview."
+            echo "- **Production Status**: This is NOT a Google Play Store production release."
+            echo "- **Signing**: Signed exclusively with a temporary debug keystore."
+          } > "$NOTES_FILE"
+
           gh release create "$RELEASE_TAG" "$ASSET_PATH" \
             --target "$TARGET_COMMIT" \
             --title "$RELEASE_TITLE" \
-            --notes "### Debug APK Build Details
-
-- **Type**: Automatically generated debug APK
-- **Builder**: GitHub Actions
-- **Run Number**: #${{ github.run_number }}
-- **Run Attempt**: ${{ github.run_attempt }}
-- **Source Commit**: \`${TARGET_COMMIT}\`
-- **Purpose**: This APK is intended for testing and development preview.
-- **Production Status**: This is NOT a Google Play Store production release.
-- **Signing**: Signed exclusively with a temporary debug keystore." \
+            --notes-file "$NOTES_FILE" \
             --latest
 
       - name: Report APK download result
