@@ -20,13 +20,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -52,8 +58,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -64,6 +68,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.ContactRule
 import com.example.data.model.SettingsData
 import com.example.ui.ReplyMateUiState
 import com.example.ui.ReplyMateViewModel
@@ -85,6 +90,20 @@ fun SettingsScreen(
     var showOpenAiKeyDialog by remember { mutableStateOf(false) }
     var showResetConfirmDialog by remember { mutableStateOf(false) }
 
+    // Dialog state for Add Contact Rule
+    var showAddContactDialog by remember { mutableStateOf(false) }
+    var newContactName by remember { mutableStateOf("") }
+    var newContactPersonality by remember { mutableStateOf(SettingsData.PROFILE_FRIENDLY) }
+    var newContactNotes by remember { mutableStateOf("") }
+
+    // Dialog state for Learn My Style sample input
+    var showAddSampleDialog by remember { mutableStateOf(false) }
+    var sampleMessageInput by remember { mutableStateOf("") }
+
+    // Dialog state for Pin setup
+    var showPinDialog by remember { mutableStateOf(false) }
+    var pinInput by remember { mutableStateOf("") }
+
     val settings = uiState.settings
 
     Scaffold(
@@ -92,7 +111,7 @@ fun SettingsScreen(
             TopAppBar(
                 title = {
                     Text(
-                        text = "Settings",
+                        text = "Settings & Intelligence",
                         fontWeight = FontWeight.Bold
                     )
                 },
@@ -137,7 +156,7 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "AI Engine",
+                            text = "AI Engine & Multi-Provider",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -173,6 +192,30 @@ fun SettingsScreen(
                             },
                             label = { Text("OpenAI") },
                             modifier = Modifier.testTag("provider_chip_openai")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Smart Fallback toggle
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Smart Fallback Provider", fontWeight = FontWeight.Medium)
+                            Text(
+                                "Automatically falls back to alternate provider if primary fails or is rate-limited",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = settings.smartFallbackEnabled,
+                            onCheckedChange = {
+                                viewModel.updateSettings(settings.copy(smartFallbackEnabled = it))
+                            }
                         )
                     }
 
@@ -237,26 +280,10 @@ fun SettingsScreen(
                             Text("Configure")
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Security,
-                            contentDescription = "Keystore",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Stored encrypted via Android KeyStore (AES-GCM). Never leaves device.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                 }
             }
 
-            // 2. Personal Reply Style
+            // 2. Personality Profiles & Reply Length
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -266,13 +293,13 @@ fun SettingsScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Default.Psychology,
-                            contentDescription = "Reply Style",
+                            contentDescription = "Reply Personality",
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(22.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "My Reply Style",
+                            text = "Personality Profiles & Length",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -280,7 +307,7 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Choose your natural texting tone:",
+                        text = "Global default reply personality:",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -291,7 +318,7 @@ fun SettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        SettingsData.DEFAULT_STYLES.forEach { style ->
+                        SettingsData.ALL_PROFILES.forEach { style ->
                             FilterChip(
                                 selected = settings.replyStyle == style,
                                 onClick = {
@@ -307,154 +334,275 @@ fun SettingsScreen(
                     }
 
                     Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "Reply Length:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        SettingsData.ALL_LENGTHS.forEach { len ->
+                            FilterChip(
+                                selected = settings.replyLength == len,
+                                onClick = {
+                                    viewModel.updateSettings(settings.copy(replyLength = len))
+                                },
+                                label = { Text(len) }
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "Smart Language Matching:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        SettingsData.ALL_LANGUAGES.forEach { lang ->
+                            FilterChip(
+                                selected = settings.preferredLanguage == lang,
+                                onClick = {
+                                    viewModel.updateSettings(settings.copy(preferredLanguage = lang))
+                                },
+                                label = { Text(lang) }
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     Text(
-                        text = "Custom Instructions",
+                        text = "Natural Language Custom Rules",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "e.g., 'Say I am driving right now and will call back tonight at 8 PM'",
+                        text = "Add conversational rules like 'Never commit to weekend plans' or 'Always ask when they are free'",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    var customInstr by remember(settings.customInstructions) {
-                        mutableStateOf(settings.customInstructions)
+                    var naturalRulesInput by remember(settings.customNaturalLanguageRules) {
+                        mutableStateOf(settings.customNaturalLanguageRules)
                     }
 
                     OutlinedTextField(
-                        value = customInstr,
+                        value = naturalRulesInput,
                         onValueChange = {
-                            customInstr = it
-                            viewModel.updateSettings(settings.copy(customInstructions = it))
+                            naturalRulesInput = it
+                            viewModel.updateSettings(settings.copy(customNaturalLanguageRules = it))
                         },
-                        placeholder = { Text("Add custom instructions for AI...") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("custom_instructions_input"),
+                        placeholder = { Text("e.g. If anyone asks for money or loan, politely decline.") },
+                        modifier = Modifier.fillMaxWidth(),
                         minLines = 2,
-                        maxLines = 4,
+                        maxLines = 3,
                         shape = RoundedCornerShape(12.dp)
                     )
                 }
             }
 
-            // 3. Approval Mode vs Auto Mode & Signature
+            // 3. "Learn My Style" Profile Card
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Tune,
-                            contentDescription = "Mode",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Operation Mode",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Approval Mode",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Tune,
+                                contentDescription = "Learn My Style",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
                             )
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = if (settings.approvalMode) {
-                                    "Review & edit AI replies in app before sending (Recommended)"
-                                } else {
-                                    "Auto Mode: AI sends replies automatically via WhatsApp notification"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = "Learn My Style Profile",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
                             )
                         }
 
-                        Switch(
-                            checked = settings.approvalMode,
-                            onCheckedChange = {
-                                viewModel.updateSettings(settings.copy(approvalMode = it))
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = MaterialTheme.colorScheme.primary
-                            ),
-                            modifier = Modifier.testTag("approval_mode_switch")
-                        )
+                        IconButton(onClick = { showAddSampleDialog = true }) {
+                            Icon(Icons.Default.Add, contentDescription = "Add sample message")
+                        }
                     }
 
-                    Spacer(modifier = Modifier.height(14.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "ReplyMate analyzes your sample texting messages locally to mimic your real tone, emoji habits, and expressions.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
-                    // Signature Setting
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier.fillMaxWidth()
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Analyzed summary box
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                                RoundedCornerShape(12.dp)
+                            )
+                            .padding(12.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
+                        Column {
                             Text(
-                                text = "Include AI Signature",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold
+                                text = "Detected Tone: ${uiState.styleAnalysis.tone}",
+                                fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.bodyMedium
                             )
                             Text(
-                                text = "Be honest: appends \"${settings.signatureText}\"",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = "Language: ${uiState.styleAnalysis.detectedLanguage} | Emojis: ${uiState.styleAnalysis.emojiFrequency}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
+                                text = "Common words: ${uiState.styleAnalysis.commonExpressions.joinToString(", ")}",
+                                style = MaterialTheme.typography.bodySmall
                             )
                         }
-
-                        Switch(
-                            checked = settings.includeSignature,
-                            onCheckedChange = {
-                                viewModel.updateSettings(settings.copy(includeSignature = it))
-                            },
-                            modifier = Modifier.testTag("signature_switch")
-                        )
                     }
 
-                    AnimatedVisibility(visible = settings.includeSignature) {
-                        var sigText by remember(settings.signatureText) {
-                            mutableStateOf(settings.signatureText)
-                        }
-                        OutlinedTextField(
-                            value = sigText,
-                            onValueChange = {
-                                sigText = it
-                                viewModel.updateSettings(settings.copy(signatureText = it))
-                            },
-                            label = { Text("Signature Text") },
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "Your Sample Messages (${uiState.userSampleMessages.size}):",
+                        fontWeight = FontWeight.Medium,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+
+                    uiState.userSampleMessages.forEachIndexed { idx, sample ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = 10.dp)
-                                .testTag("signature_text_input"),
-                            shape = RoundedCornerShape(10.dp),
-                            singleLine = true
-                        )
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "\"$sample\"",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f)
+                            )
+                            IconButton(onClick = { viewModel.removeUserSampleMessage(idx) }) {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = "Remove",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { viewModel.resetUserStyle() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Reset Style Profile")
                     }
                 }
             }
 
-            // 4. Smart Filters & Anti-Spam
+            // 4. Contact Intelligence & Per-Contact Rules
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Person,
+                                contentDescription = "Contact Rules",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Contact Intelligence Rules",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        IconButton(onClick = { showAddContactDialog = true }) {
+                            Icon(Icons.Default.Add, contentDescription = "Add Contact Rule")
+                        }
+                    }
+
+                    Text(
+                        text = "Assign distinct personalities (e.g. Professional for Boss, Funny for Best Friend) and manage local private memories.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    if (uiState.contactRules.isEmpty()) {
+                        Text(
+                            text = "No custom contact rules yet. Tap + to configure special contacts.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        uiState.contactRules.values.forEach { rule ->
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(rule.contactName, fontWeight = FontWeight.Bold)
+                                        Text(
+                                            "Personality: ${rule.personality} | Auto-reply: ${if (rule.autoReplyEnabled) "ON" else "OFF"}",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                        if (rule.customNotes.isNotBlank()) {
+                                            Text("Note: ${rule.customNotes}", style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    }
+                                    IconButton(onClick = { viewModel.deleteContactRule(rule.contactName) }) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Delete Rule")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 5. Smart Group Mode & Batching
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -463,66 +611,129 @@ fun SettingsScreen(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Icons.Default.FilterList,
-                            contentDescription = "Filters",
+                            imageVector = Icons.Default.Group,
+                            contentDescription = "Groups",
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(22.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Smart Filters & Anti-Spam",
+                            text = "Group Mode & Smart Batching",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text("WhatsApp Group Handling:", fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(6.dp))
 
-                    // Ignore groups
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        listOf(
+                            SettingsData.GROUP_MODE_DISABLED to "OFF (Recommended)",
+                            SettingsData.GROUP_MODE_MENTION_ONLY to "Mention Only (@)",
+                            SettingsData.GROUP_MODE_SELECTED to "Selected Groups",
+                            SettingsData.GROUP_MODE_ALL to "All Groups"
+                        ).forEach { (mode, label) ->
+                            FilterChip(
+                                selected = settings.groupMode == mode,
+                                onClick = {
+                                    viewModel.updateSettings(settings.copy(groupMode = mode))
+                                },
+                                label = { Text(label) }
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Smart Batching
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Ignore Groups", fontWeight = FontWeight.Medium)
+                            Text("Smart Message Batching", fontWeight = FontWeight.Medium)
                             Text(
-                                "Never auto-reply in WhatsApp group chats",
+                                "Combines rapid-fire messages into one single context before replying",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Switch(
-                            checked = settings.ignoreGroups,
+                            checked = settings.smartBatchingEnabled,
                             onCheckedChange = {
-                                viewModel.updateSettings(settings.copy(ignoreGroups = it))
-                            },
-                            modifier = Modifier.testTag("ignore_groups_switch")
+                                viewModel.updateSettings(settings.copy(smartBatchingEnabled = it))
+                            }
+                        )
+                    }
+
+                    AnimatedVisibility(visible = settings.smartBatchingEnabled) {
+                        Column(modifier = Modifier.padding(top = 10.dp)) {
+                            Text("Batching Window: ${settings.batchWindowSeconds} seconds")
+                            Slider(
+                                value = settings.batchWindowSeconds.toFloat(),
+                                onValueChange = {
+                                    viewModel.updateSettings(settings.copy(batchWindowSeconds = it.roundToInt()))
+                                },
+                                valueRange = 2f..15f,
+                                steps = 12
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 6. Quiet Schedule & Security App Lock
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Bedtime,
+                            contentDescription = "Quiet Hours",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Quiet Schedule & Security Lock",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
                         )
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Ignore unknown numbers
+                    // Quiet hours switch
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Ignore Unknown Numbers", fontWeight = FontWeight.Medium)
+                            Text("Quiet Hours Schedule", fontWeight = FontWeight.Medium)
                             Text(
-                                "Only respond to named contacts, ignore non-contacts",
+                                "Sleep & focus hours (10:00 PM to 07:00 AM) auto-pauses replies",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Switch(
-                            checked = settings.ignoreUnknownNumbers,
+                            checked = settings.quietHoursEnabled,
                             onCheckedChange = {
-                                viewModel.updateSettings(settings.copy(ignoreUnknownNumbers = it))
-                            },
-                            modifier = Modifier.testTag("ignore_unknown_switch")
+                                viewModel.updateSettings(settings.copy(quietHoursEnabled = it))
+                            }
                         )
                     }
 
@@ -530,68 +741,35 @@ fun SettingsScreen(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Delay slider
-                    Text(
-                        text = "Reply Delay: ${settings.replyDelaySeconds} seconds",
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        text = "Simulates human typing delay before sending",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Slider(
-                        value = settings.replyDelaySeconds.toFloat(),
-                        onValueChange = {
-                            viewModel.updateSettings(settings.copy(replyDelaySeconds = it.roundToInt()))
-                        },
-                        valueRange = 1f..30f,
-                        steps = 28,
-                        modifier = Modifier.testTag("delay_slider")
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Loop prevention limit
-                    Text(
-                        text = "Max Replies Per Conversation: ${settings.maxRepliesPerConversation}",
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        text = "Stops reply loops with other bots or active chats",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Slider(
-                        value = settings.maxRepliesPerConversation.toFloat(),
-                        onValueChange = {
-                            viewModel.updateSettings(settings.copy(maxRepliesPerConversation = it.roundToInt()))
-                        },
-                        valueRange = 1f..6f,
-                        steps = 4,
-                        modifier = Modifier.testTag("max_replies_slider")
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Daily limit slider
-                    Text(
-                        text = "Daily Reply Limit: ${settings.dailyReplyLimit} messages",
-                        fontWeight = FontWeight.Medium
-                    )
-                    Slider(
-                        value = settings.dailyReplyLimit.toFloat(),
-                        onValueChange = {
-                            viewModel.updateSettings(settings.copy(dailyReplyLimit = it.roundToInt()))
-                        },
-                        valueRange = 5f..100f,
-                        steps = 19,
-                        modifier = Modifier.testTag("daily_limit_slider")
-                    )
+                    // App Lock (PIN)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("App Lock Protection", fontWeight = FontWeight.Medium)
+                            Text(
+                                if (settings.appLockEnabled) "PIN protection is active" else "Protect app settings & private memories with PIN",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = settings.appLockEnabled,
+                            onCheckedChange = { enabled ->
+                                if (enabled) {
+                                    showPinDialog = true
+                                } else {
+                                    viewModel.updateSettings(settings.copy(appLockEnabled = false, appLockPin = ""))
+                                }
+                            }
+                        )
+                    }
                 }
             }
 
-            // 5. Privacy & Data Control
+            // 7. Privacy Center & Data Deletion
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -607,7 +785,7 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Privacy & Local Data",
+                            text = "Privacy Center & Local Data",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -615,23 +793,46 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "ReplyMate does not run an external tracking server. All message filtering, Keystore encryption, and conversation context reside only on your device.",
+                        text = "All memory facts, rules, and conversation logs are strictly kept on-device. You can clear them at any time.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         OutlinedButton(
+                            onClick = { viewModel.clearAllMemories() },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Clear Memories")
+                        }
+
+                        OutlinedButton(
                             onClick = { viewModel.clearConversationContext() },
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.weight(1f)
                         ) {
                             Text("Clear Context")
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedButton(
+                            onClick = { viewModel.clearLogs() },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Clear Logs")
                         }
 
                         OutlinedButton(
@@ -645,58 +846,156 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    OutlinedButton(
-                        onClick = { viewModel.openNotificationSettings() },
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.NotificationsActive,
-                            contentDescription = "Notification Access",
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            if (uiState.isNotificationAccessGranted) {
-                                "Notification Access: Connected (Open Settings)"
-                            } else {
-                                "Open Notification Access Settings"
-                            }
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
                     Button(
                         onClick = { showResetConfirmDialog = true },
                         colors = ButtonDefaults.buttonColors(containerColor = AlertRed),
-                        shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = "Reset",
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
                         Text("Reset All Settings & Data")
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(24.dp))
         }
+    }
+
+    // Dialog: Add Contact Rule
+    if (showAddContactDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddContactDialog = false },
+            title = { Text("Add Contact Rule") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = newContactName,
+                        onValueChange = { newContactName = it },
+                        label = { Text("Contact Name (Exact WhatsApp name)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text("Personality Profile:")
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SettingsData.ALL_PROFILES.take(4).forEach { p ->
+                            FilterChip(
+                                selected = newContactPersonality == p,
+                                onClick = { newContactPersonality = p },
+                                label = { Text(p) }
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        value = newContactNotes,
+                        onValueChange = { newContactNotes = it },
+                        label = { Text("Notes (e.g. My project manager)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    if (newContactName.isNotBlank()) {
+                        viewModel.saveContactRule(
+                            ContactRule(
+                                contactName = newContactName.trim(),
+                                personality = newContactPersonality,
+                                customNotes = newContactNotes.trim()
+                            )
+                        )
+                        showAddContactDialog = false
+                        newContactName = ""
+                        newContactNotes = ""
+                    }
+                }) {
+                    Text("Save Rule")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddContactDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Dialog: Add Sample Message
+    if (showAddSampleDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddSampleDialog = false },
+            title = { Text("Add Message Sample") },
+            text = {
+                Column {
+                    Text("Paste an example message you often send on WhatsApp:")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = sampleMessageInput,
+                        onValueChange = { sampleMessageInput = it },
+                        placeholder = { Text("e.g. Haan bro, call karta hu 10 min mein") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    if (sampleMessageInput.isNotBlank()) {
+                        viewModel.addUserSampleMessage(sampleMessageInput.trim())
+                        showAddSampleDialog = false
+                        sampleMessageInput = ""
+                    }
+                }) {
+                    Text("Analyze & Add")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddSampleDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Dialog: PIN Setup
+    if (showPinDialog) {
+        AlertDialog(
+            onDismissRequest = { showPinDialog = false },
+            title = { Text("Set 4-Digit Security PIN") },
+            text = {
+                OutlinedTextField(
+                    value = pinInput,
+                    onValueChange = { if (it.length <= 6 && it.all { c -> c.isDigit() }) pinInput = it },
+                    label = { Text("Enter PIN") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    if (pinInput.length >= 4) {
+                        viewModel.updateSettings(settings.copy(appLockEnabled = true, appLockPin = pinInput))
+                        showPinDialog = false
+                        pinInput = ""
+                    }
+                }) {
+                    Text("Enable PIN")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPinDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     // Dialog: Gemini API Key
     if (showGeminiKeyDialog) {
         AlertDialog(
             onDismissRequest = { showGeminiKeyDialog = false },
-            title = { Text("Set Gemini API Key") },
+            title = { Text("Set Google Gemini API Key") },
             text = {
                 Column {
                     Text(
-                        "Enter your personal Google Gemini API key. Stored encrypted in Android KeyStore.",
+                        "Stored encrypted in hardware KeyStore (AES-GCM).",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -743,7 +1042,7 @@ fun SettingsScreen(
             text = {
                 Column {
                     Text(
-                        "Enter your personal OpenAI API key (sk-...). Stored encrypted in Android KeyStore.",
+                        "Stored encrypted in Android KeyStore.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

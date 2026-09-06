@@ -17,12 +17,14 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.ReplyMateViewModel
 import com.example.ui.screens.MainScreen
+import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.MyApplicationTheme
 
 enum class Screen {
     MAIN,
-    SETTINGS
+    SETTINGS,
+    ONBOARDING
 }
 
 class MainActivity : ComponentActivity() {
@@ -52,10 +54,19 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun ReplyMateApp(viewModel: ReplyMateViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    var currentScreen by remember { mutableStateOf(Screen.MAIN) }
+    var currentScreen by remember {
+        // If notification access is not granted, show onboarding first
+        mutableStateOf(if (!uiState.isNotificationAccessGranted) Screen.ONBOARDING else Screen.MAIN)
+    }
 
     Crossfade(targetState = currentScreen, label = "ScreenTransition") { screen ->
         when (screen) {
+            Screen.ONBOARDING -> {
+                OnboardingScreen(
+                    onFinish = { currentScreen = Screen.MAIN },
+                    onOpenNotificationSettings = { viewModel.openNotificationSettings() }
+                )
+            }
             Screen.MAIN -> {
                 MainScreen(
                     uiState = uiState,

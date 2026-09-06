@@ -30,7 +30,12 @@ class OpenAIProvider(
         conversationHistory: List<Pair<String, String>>,
         replyStyle: String,
         customInstructions: String,
-        signature: String?
+        signature: String?,
+        preferredLanguage: String,
+        replyLength: String,
+        contactNotes: String,
+        contactMemories: List<String>,
+        naturalRules: String
     ): Result<String> = withContext(Dispatchers.IO) {
         val apiKey = keyStorage.getOpenAiApiKey()
 
@@ -41,7 +46,15 @@ class OpenAIProvider(
         }
 
         try {
-            val systemPrompt = buildSystemPrompt(replyStyle, customInstructions)
+            val systemPrompt = buildSystemPrompt(
+                replyStyle = replyStyle,
+                customInstructions = customInstructions,
+                preferredLanguage = preferredLanguage,
+                replyLength = replyLength,
+                contactNotes = contactNotes,
+                contactMemories = contactMemories,
+                naturalRules = naturalRules
+            )
             val userPrompt = buildUserPrompt(senderName, incomingMessage, conversationHistory)
 
             val messagesArray = JSONArray().apply {
@@ -93,26 +106,65 @@ class OpenAIProvider(
             }
 
             var cleanReply = cleanGeneratedReply(generatedText)
+
+            // Validation Quality check
+            val quality = ResponseQualityFilter.validateReply(cleanReply, incomingMessage)
+            if (!quality.isValid) {
+                return@withContext Result.failure(Exception(quality.reason ?: "AI output rejected by quality filter"))
+            }
+
             if (!signature.isNullOrBlank()) {
                 cleanReply = "$cleanReply\n$signature"
             }
 
             Result.success(cleanReply)
         } catch (e: Exception) {
-            Result.failure(Exception("AI reply unavailable. Please reply manually."))
+            Result.failure(Exception(e.message ?: "AI reply unavailable. Please reply manually."))
         }
     }
 
-    private fun buildSystemPrompt(replyStyle: String, customInstructions: String): String {
+    private fun buildSystemPrompt(
+        replyStyle: String,
+        customInstructions: String,
+        preferredLanguage: String,
+        replyLength: String,
+        contactNotes: String,
+        contactMemories: List<String>,
+        naturalRules: String
+    ): String {
         return buildString {
-            append("You are ReplyMate, a personal WhatsApp reply assistant on behalf of the user. ")
-            append("Reply directly as the person receiving the message. ")
-            append("Replies must be concise, helpful, human-like. ")
-            append("Reply Style: $replyStyle. ")
-            if (customInstructions.isNotBlank()) {
-                append("Custom instructions from owner: $customInstructions. ")
+            append("You are ReplyMate, an intelligent WhatsApp reply assistant on behalf of the phone owner. ")
+            append("Reply directly as the person receiving the message. Do NOT speak as an AI or third party. ")
+            append("Personality profile: $replyStyle. ")
+            append("Target reply length: $replyLength. ")
+
+            if (preferredLanguage != "Auto Detect") {
+                append("Language requirement: Strictly respond in $preferredLanguage. ")
+            } else {
+                append("Language requirement: Automatically match the sender's language and dialect (English, Hindi, Hinglish, Urdu, Punjabi, Bengali). ")
             }
-            append("Guidelines: Keep within 1-3 sentences. Output ONLY the reply text itself.")
+
+            if (contactNotes.isNotBlank()) {
+                append("Context about this contact: $contactNotes. ")
+            }
+
+            if (contactMemories.isNotEmpty()) {
+                append("Known private memories about this contact: ")
+                contactMemories.forEach { append("- $it. ") }
+            }
+
+            if (naturalRules.isNotBlank()) {
+                append("Custom owner rules: $naturalRules. ")
+            }
+
+            if (customInstructions.isNotBlank()) {
+                append("Special instructions: $customInstructions. ")
+            }
+
+            append("Rules: ")
+            append("1. Be context-aware, avoid repetitive or generic phrasing. ")
+            append("2. Keep replies natural and conversational for instant messaging. ")
+            append("3. Never say 'Here is your reply' or 'As an AI'. Output ONLY the exact text message to be sent.")
         }
     }
 
@@ -123,7 +175,7 @@ class OpenAIProvider(
     ): String {
         return buildString {
             if (conversationHistory.isNotEmpty()) {
-                append("Recent chat history:\n")
+                append("Recent conversation context:\n")
                 conversationHistory.forEach { (sender, text) ->
                     append("$sender: $text\n")
                 }
@@ -131,7 +183,7 @@ class OpenAIProvider(
             }
             append("New incoming WhatsApp message from $senderName:\n")
             append("\"$incomingMessage\"\n\n")
-            append("Reply:")
+            append("Generate the suggested reply:")
         }
     }
 

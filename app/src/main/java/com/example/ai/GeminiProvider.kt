@@ -31,7 +31,12 @@ class GeminiProvider(
         conversationHistory: List<Pair<String, String>>,
         replyStyle: String,
         customInstructions: String,
-        signature: String?
+        signature: String?,
+        preferredLanguage: String,
+        replyLength: String,
+        contactNotes: String,
+        contactMemories: List<String>,
+        naturalRules: String
     ): Result<String> = withContext(Dispatchers.IO) {
         // Priority: User's stored key -> BuildConfig key fallback
         val userKey = keyStorage.getGeminiApiKey()
@@ -49,7 +54,15 @@ class GeminiProvider(
         }
 
         try {
-            val systemPrompt = buildSystemPrompt(replyStyle, customInstructions)
+            val systemPrompt = buildSystemPrompt(
+                replyStyle = replyStyle,
+                customInstructions = customInstructions,
+                preferredLanguage = preferredLanguage,
+                replyLength = replyLength,
+                contactNotes = contactNotes,
+                contactMemories = contactMemories,
+                naturalRules = naturalRules
+            )
             val userPrompt = buildUserPrompt(senderName, incomingMessage, conversationHistory)
 
             val requestJson = JSONObject().apply {
@@ -104,30 +117,65 @@ class GeminiProvider(
             }
 
             var cleanReply = cleanGeneratedReply(generatedText)
+
+            // Validation Quality check
+            val quality = ResponseQualityFilter.validateReply(cleanReply, incomingMessage)
+            if (!quality.isValid) {
+                return@withContext Result.failure(Exception(quality.reason ?: "AI output rejected by quality filter"))
+            }
+
             if (!signature.isNullOrBlank()) {
                 cleanReply = "$cleanReply\n$signature"
             }
 
             Result.success(cleanReply)
         } catch (e: Exception) {
-            Result.failure(Exception("AI reply unavailable. Please reply manually."))
+            Result.failure(Exception(e.message ?: "AI reply unavailable. Please reply manually."))
         }
     }
 
-    private fun buildSystemPrompt(replyStyle: String, customInstructions: String): String {
+    private fun buildSystemPrompt(
+        replyStyle: String,
+        customInstructions: String,
+        preferredLanguage: String,
+        replyLength: String,
+        contactNotes: String,
+        contactMemories: List<String>,
+        naturalRules: String
+    ): String {
         return buildString {
-            append("You are ReplyMate, a personal WhatsApp reply assistant on behalf of the smartphone owner. ")
-            append("Reply directly as the person receiving the message. ")
-            append("Your replies must sound natural, concise, and human. ")
-            append("Reply Style: $replyStyle. ")
-            if (customInstructions.isNotBlank()) {
-                append("Owner's special instructions: $customInstructions. ")
+            append("You are ReplyMate, an intelligent WhatsApp reply assistant on behalf of the phone owner. ")
+            append("Reply directly as the person receiving the message. Do NOT speak as an AI or third party. ")
+            append("Personality profile: $replyStyle. ")
+            append("Target reply length: $replyLength. ")
+
+            if (preferredLanguage != "Auto Detect") {
+                append("Language requirement: Strictly respond in $preferredLanguage. ")
+            } else {
+                append("Language requirement: Automatically match the sender's language and dialect (English, Hindi, Hinglish, Urdu, Punjabi, Bengali). ")
             }
-            append("Guidelines: ")
-            append("1. Keep reply to 1-3 sentences maximum. ")
-            append("2. Do not quote the message or say 'Here is your reply:'. ")
-            append("3. Output ONLY the reply text itself. ")
-            append("4. Match the language/tone of the sender (e.g. Hindi/Hinglish/English).")
+
+            if (contactNotes.isNotBlank()) {
+                append("Context about this contact: $contactNotes. ")
+            }
+
+            if (contactMemories.isNotEmpty()) {
+                append("Known private memories about this contact: ")
+                contactMemories.forEach { append("- $it. ") }
+            }
+
+            if (naturalRules.isNotBlank()) {
+                append("Custom owner rules: $naturalRules. ")
+            }
+
+            if (customInstructions.isNotBlank()) {
+                append("Special instructions: $customInstructions. ")
+            }
+
+            append("Rules: ")
+            append("1. Be context-aware, avoid repetitive or generic phrasing. ")
+            append("2. Keep replies natural and conversational for instant messaging. ")
+            append("3. Never say 'Here is your reply' or 'As an AI'. Output ONLY the exact text message to be sent.")
         }
     }
 

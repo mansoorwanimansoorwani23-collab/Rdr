@@ -9,15 +9,17 @@ import androidx.room.RoomDatabase
     entities = [
         PendingReplyEntity::class,
         ConversationMessageEntity::class,
-        ReplyLogEntity::class
+        ReplyLogEntity::class,
+        ContactMemoryEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun pendingReplyDao(): PendingReplyDao
     abstract fun conversationMessageDao(): ConversationMessageDao
     abstract fun replyLogDao(): ReplyLogDao
+    abstract fun contactMemoryDao(): ContactMemoryDao
 
     companion object {
         @Volatile

@@ -5,10 +5,15 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ReplyMateApplication
 import com.example.ai.AIReplyResult
+import com.example.ai.MessageIntelligence
+import com.example.ai.StyleAnalyzer
+import com.example.data.local.ContactMemoryEntity
 import com.example.data.local.ConversationMessageEntity
 import com.example.data.local.PendingReplyEntity
 import com.example.data.local.ReplyLogEntity
+import com.example.data.model.ContactRule
 import com.example.data.model.SettingsData
+import com.example.data.model.StyleAnalysis
 import com.example.data.security.SecureKeyStorage
 import com.example.service.NotificationHelper
 import com.example.service.ReplySender
@@ -29,7 +34,14 @@ data class ReplyMateUiState(
     val openAiKeyMasked: String = "Not configured",
     val isTestingSim: Boolean = false,
     val testSimResult: String? = null,
-    val snackbarMessage: String? = null
+    val snackbarMessage: String? = null,
+
+    // Pro Features state
+    val contactRules: Map<String, ContactRule> = emptyMap(),
+    val userSampleMessages: List<String> = emptyList(),
+    val styleAnalysis: StyleAnalysis = StyleAnalysis(),
+    val allMemories: List<ContactMemoryEntity> = emptyList(),
+    val isAppLocked: Boolean = false
 )
 
 class ReplyMateViewModel(application: Application) : AndroidViewModel(application) {
@@ -45,7 +57,11 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
             settings = prefRepo.settingsFlow.value,
             isNotificationAccessGranted = NotificationHelper.isNotificationAccessGranted(app),
             geminiKeyMasked = SecureKeyStorage.maskKey(keyStorage.getGeminiApiKey()),
-            openAiKeyMasked = SecureKeyStorage.maskKey(keyStorage.getOpenAiApiKey())
+            openAiKeyMasked = SecureKeyStorage.maskKey(keyStorage.getOpenAiApiKey()),
+            contactRules = prefRepo.contactRulesFlow.value,
+            userSampleMessages = prefRepo.userSampleMessages.value,
+            styleAnalysis = prefRepo.styleAnalysisFlow.value,
+            isAppLocked = prefRepo.settingsFlow.value.appLockEnabled
         )
     )
     val uiState: StateFlow<ReplyMateUiState> = _uiState.asStateFlow()
@@ -55,6 +71,34 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             prefRepo.settingsFlow.collect { newSettings ->
                 _uiState.update { it.copy(settings = newSettings) }
+            }
+        }
+
+        // Collect contact rules updates
+        viewModelScope.launch {
+            prefRepo.contactRulesFlow.collect { rules ->
+                _uiState.update { it.copy(contactRules = rules) }
+            }
+        }
+
+        // Collect style samples
+        viewModelScope.launch {
+            prefRepo.userSampleMessages.collect { samples ->
+                _uiState.update { it.copy(userSampleMessages = samples) }
+            }
+        }
+
+        // Collect style analysis
+        viewModelScope.launch {
+            prefRepo.styleAnalysisFlow.collect { analysis ->
+                _uiState.update { it.copy(styleAnalysis = analysis) }
+            }
+        }
+
+        // Collect memories
+        viewModelScope.launch {
+            db.contactMemoryDao().observeAllMemories().collect { mems ->
+                _uiState.update { it.copy(allMemories = mems) }
             }
         }
 
@@ -99,19 +143,18 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun toggleAutoReply(enabled: Boolean) {
-        if (enabled && !NotificationHelper.isNotificationAccessGranted(app)) {
-            _uiState.update { it.copy(snackbarMessage = "Notification Access is required.") }
-            return
-        }
         prefRepo.toggleAutoReply(enabled)
+    }
+
+    fun toggleEmergencyKillSwitch(kill: Boolean) {
+        prefRepo.setEmergencyKillSwitch(kill)
         _uiState.update {
-            it.copy(snackbarMessage = if (enabled) "AI Auto Reply turned ON" else "AI Auto Reply turned OFF")
+            it.copy(snackbarMessage = if (kill) "EMERGENCY: All Auto-Replies STOPPED immediately" else "Auto-Reply Resumed")
         }
     }
 
     fun updateSettings(newSettings: SettingsData) {
         prefRepo.updateSettings(newSettings)
-        _uiState.update { it.copy(snackbarMessage = "Settings updated") }
     }
 
     fun saveGeminiApiKey(key: String) {
@@ -138,6 +181,88 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
                 geminiKeyMasked = SecureKeyStorage.maskKey(keyStorage.getGeminiApiKey()),
                 openAiKeyMasked = SecureKeyStorage.maskKey(keyStorage.getOpenAiApiKey())
             )
+        }
+    }
+
+    // Contact Intelligence
+    fun saveContactRule(rule: ContactRule) {
+        prefRepo.saveContactRule(rule)
+        _uiState.update { it.copy(snackbarMessage = "Rule saved for ${rule.contactName}") }
+    }
+
+    fun deleteContactRule(contactName: String) {
+        prefRepo.deleteContactRule(contactName)
+        _uiState.update { it.copy(snackbarMessage = "Rule removed for $contactName") }
+    }
+
+    // Memories
+    fun addContactMemory(contactName: String, fact: String) {
+        viewModelScope.launch {
+            db.contactMemoryDao().insertMemory(
+                ContactMemoryEntity(contactKey = contactName, memoryFact = fact)
+            )
+            _uiState.update { it.copy(snackbarMessage = "Memory remembered for $contactName") }
+        }
+    }
+
+    fun deleteMemory(id: Long) {
+        viewModelScope.launch {
+            db.contactMemoryDao().deleteMemory(id)
+            _uiState.update { it.copy(snackbarMessage = "Memory erased") }
+        }
+    }
+
+    fun clearAllMemories() {
+        viewModelScope.launch {
+            db.contactMemoryDao().clearAllMemories()
+            _uiState.update { it.copy(snackbarMessage = "All contact memories cleared") }
+        }
+    }
+
+    // Learn My Style
+    fun addUserSampleMessage(message: String) {
+        if (message.isBlank()) return
+        val current = prefRepo.userSampleMessages.value.toMutableList()
+        current.add(message.trim())
+        prefRepo.saveUserSamples(current)
+        reanalyzeStyle(current)
+    }
+
+    fun removeUserSampleMessage(index: Int) {
+        val current = prefRepo.userSampleMessages.value.toMutableList()
+        if (index in current.indices) {
+            current.removeAt(index)
+            prefRepo.saveUserSamples(current)
+            reanalyzeStyle(current)
+        }
+    }
+
+    fun resetUserStyle() {
+        prefRepo.saveUserSamples(emptyList())
+        val defaultAnalysis = StyleAnalysis()
+        prefRepo.saveStyleAnalysis(defaultAnalysis)
+        _uiState.update { it.copy(snackbarMessage = "Personal style reset to default") }
+    }
+
+    private fun reanalyzeStyle(samples: List<String>) {
+        val analysis = StyleAnalyzer.analyzeSamples(samples)
+        prefRepo.saveStyleAnalysis(analysis)
+        _uiState.update { it.copy(snackbarMessage = "Style analyzed: ${analysis.tone}") }
+    }
+
+    fun unlockApp(pin: String): Boolean {
+        val correctPin = prefRepo.settingsFlow.value.appLockPin
+        return if (pin == correctPin || correctPin.isBlank()) {
+            _uiState.update { it.copy(isAppLocked = false) }
+            true
+        } else {
+            false
+        }
+    }
+
+    fun lockApp() {
+        if (prefRepo.settingsFlow.value.appLockEnabled) {
+            _uiState.update { it.copy(isAppLocked = true) }
         }
     }
 
@@ -229,11 +354,13 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
     fun regenerateReply(pending: PendingReplyEntity) {
         viewModelScope.launch {
             val settings = prefRepo.settingsFlow.value
+            val contactRule = prefRepo.contactRulesFlow.value[pending.senderName]
             val result = aiEngine.processIncomingMessage(
                 senderName = pending.senderName,
                 conversationKey = pending.conversationKey,
                 messageText = pending.incomingMessage,
-                settings = settings
+                settings = settings,
+                contactRule = contactRule
             )
 
             when (result) {
@@ -243,7 +370,7 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
                         newReply = result.replyText,
                         status = PendingReplyEntity.STATUS_PENDING
                     )
-                    _uiState.update { it.copy(snackbarMessage = "New reply generated") }
+                    _uiState.update { it.copy(snackbarMessage = "Regenerated reply using ${result.provider}") }
                 }
                 is AIReplyResult.Sensitive -> {
                     _uiState.update { it.copy(snackbarMessage = "Message flagged as sensitive: ${result.reason}") }
@@ -272,11 +399,15 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
             }
 
             val settings = prefRepo.settingsFlow.value
+            val contactRule = prefRepo.contactRulesFlow.value[sender]
+            val analysis = MessageIntelligence.analyze(message)
+
             val result = aiEngine.processIncomingMessage(
                 senderName = sender,
                 conversationKey = sender,
                 messageText = message,
-                settings = settings
+                settings = settings,
+                contactRule = contactRule
             )
 
             when (result) {
@@ -296,7 +427,7 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
                     _uiState.update {
                         it.copy(
                             isTestingSim = false,
-                            testSimResult = "Generated (${result.provider}):\n\"${result.replyText}\""
+                            testSimResult = "Detected Intent: ${analysis.intent.name} | Lang: ${analysis.detectedLanguage} | Priority: ${analysis.priority.name}\n\nGenerated (${result.provider}):\n\"${result.replyText}\""
                         )
                     }
                 }
@@ -315,7 +446,7 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
                     _uiState.update {
                         it.copy(
                             isTestingSim = false,
-                            testSimResult = "🛡️ Sensitive message detected:\n${result.reason}\n(Auto-reply prevented)"
+                            testSimResult = "🛡️ Sensitive message detected (${analysis.intent.name}):\n${result.reason}\n(Auto-reply prevented)"
                         )
                     }
                 }
@@ -353,7 +484,8 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
             db.pendingReplyDao().clearAll()
             db.conversationMessageDao().clearAll()
             db.replyLogDao().clearAll()
-            _uiState.update { it.copy(snackbarMessage = "All ReplyMate settings and data reset") }
+            db.contactMemoryDao().clearAllMemories()
+            _uiState.update { it.copy(snackbarMessage = "All ReplyMate settings, memories, and data reset") }
         }
     }
 

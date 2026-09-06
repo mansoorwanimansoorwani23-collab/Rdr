@@ -81,8 +81,8 @@ jobs:
       - name: Verify debug APK
         run: |
           EXPECTED_APK="app/build/outputs/apk/debug/app-debug.apk"
-          if [ ! -f "$EXPECTED_APK" ]; then
-            echo "Error: Expected debug APK not found at $EXPECTED_APK"
+          if [ ! -e "$EXPECTED_APK" ]; then
+            echo "Error: Expected debug APK does not exist at $EXPECTED_APK"
             echo "Searching only inside app/build/outputs/apk for discovered APKs:"
             if [ -d "app/build/outputs/apk" ]; then
               find app/build/outputs/apk -maxdepth 3 -type f -name "*.apk"

@@ -24,11 +24,13 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.HourglassEmpty
-import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -64,6 +66,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.PendingReplyEntity
@@ -97,6 +100,92 @@ fun MainScreen(
 
     var simSenderInput by remember { mutableStateOf("Rahul") }
     var simMessageInput by remember { mutableStateOf("Hey! Are you free for a quick call?") }
+    var unlockPinInput by remember { mutableStateOf("") }
+    var pinError by remember { mutableStateOf(false) }
+
+    // App Lock Overlay if active
+    if (uiState.isAppLocked) {
+        Scaffold { padding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = "App Lock",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "ReplyMate Locked",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Enter your PIN to access rules and replies",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        OutlinedTextField(
+                            value = unlockPinInput,
+                            onValueChange = {
+                                if (it.length <= 6 && it.all { c -> c.isDigit() }) {
+                                    unlockPinInput = it
+                                    pinError = false
+                                }
+                            },
+                            label = { Text("PIN") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            singleLine = true,
+                            isError = pinError,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        if (pinError) {
+                            Text(
+                                text = "Incorrect PIN",
+                                color = AlertRed,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Button(
+                            onClick = {
+                                val success = viewModel.unlockApp(unlockPinInput)
+                                if (!success) {
+                                    pinError = true
+                                } else {
+                                    unlockPinInput = ""
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Unlock")
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -121,12 +210,12 @@ fun MainScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "ReplyMate",
+                                text = "ReplyMate Pro",
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "WhatsApp Reply Assistant",
+                                text = "WhatsApp AI Assistant",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -165,9 +254,45 @@ fun MainScreen(
                 )
             }
 
-            // 2. Large Status Indicator Card
+            // 2. Emergency Kill Switch Banner (if active) or Quick Button
+            if (uiState.settings.emergencyKillSwitch) {
+                item {
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = AlertRed),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "EMERGENCY KILL SWITCH ACTIVE",
+                                    color = MaterialTheme.colorScheme.onError,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "All auto-replies are strictly blocked.",
+                                    color = MaterialTheme.colorScheme.onError.copy(alpha = 0.9f),
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            Button(
+                                onClick = { viewModel.toggleEmergencyKillSwitch(false) },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Text("Resume", color = AlertRed, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Large Status Indicator Card
             item {
-                val isAutoReplyOn = uiState.settings.aiAutoReplyEnabled
+                val isAutoReplyOn = uiState.settings.aiAutoReplyEnabled && !uiState.settings.emergencyKillSwitch
                 Card(
                     shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(
@@ -230,7 +355,22 @@ fun MainScreen(
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(18.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Emergency Kill Switch Toggle Button
+                        if (!uiState.settings.emergencyKillSwitch) {
+                            OutlinedButton(
+                                onClick = { viewModel.toggleEmergencyKillSwitch(true) },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = AlertRed),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.StopCircle, contentDescription = "Emergency Kill", tint = AlertRed)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Emergency: STOP AUTO REPLY")
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
                         HorizontalDivider(
                             color = if (isAutoReplyOn) {
                                 MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.15f)
@@ -302,7 +442,7 @@ fun MainScreen(
                 }
             }
 
-            // 3. Pending Approvals Section (If any)
+            // 4. Pending Approvals Section (If any)
             if (uiState.pendingReplies.isNotEmpty()) {
                 item {
                     Row(
@@ -345,7 +485,7 @@ fun MainScreen(
                 }
             }
 
-            // 4. Interactive Test Simulator
+            // 5. Interactive Test Simulator
             item {
                 Card(
                     shape = RoundedCornerShape(20.dp),
@@ -375,7 +515,7 @@ fun MainScreen(
                                         fontWeight = FontWeight.Bold
                                     )
                                     Text(
-                                        text = "Simulate incoming WhatsApp messages to test AI replies",
+                                        text = "Simulate incoming WhatsApp messages to test AI intent, tone, & safety",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -516,7 +656,7 @@ fun MainScreen(
                 }
             }
 
-            // 5. Recent Activity Logs Section
+            // 6. Recent Activity Logs Section
             item {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,

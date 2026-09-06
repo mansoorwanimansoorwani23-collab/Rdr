@@ -10,6 +10,11 @@ interface AIProvider {
         conversationHistory: List<Pair<String, String>>, // Pair(sender, text)
         replyStyle: String,
         customInstructions: String,
-        signature: String?
+        signature: String?,
+        preferredLanguage: String = "Auto Detect",
+        replyLength: String = "Short (1-2 sentences)",
+        contactNotes: String = "",
+        contactMemories: List<String> = emptyList(),
+        naturalRules: String = ""
     ): Result<String>
 }

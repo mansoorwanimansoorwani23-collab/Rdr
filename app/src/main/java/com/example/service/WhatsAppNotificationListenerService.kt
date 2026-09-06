@@ -17,6 +17,14 @@ import kotlinx.coroutines.launch
 class WhatsAppNotificationListenerService : NotificationListenerService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var batcher: SmartMessageBatcher? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        batcher = SmartMessageBatcher(serviceScope) { convKey, sender, combinedMsg ->
+            handleBatchedMessage(convKey, sender, combinedMsg)
+        }
+    }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         super.onNotificationPosted(sbn)
@@ -25,48 +33,81 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
         val app = ReplyMateApplication.instance
         val settings = app.preferencesRepository.settingsFlow.value
 
-        // If AI Auto Reply is OFF, immediately ignore
-        if (!settings.aiAutoReplyEnabled) {
+        // Quick check: If AI Auto Reply is OFF or Kill Switch is ON, ignore immediately
+        if (!settings.aiAutoReplyEnabled || settings.emergencyKillSwitch) {
             return
         }
 
         val parsed = NotificationParser.parse(sbn) ?: return
 
+        // Cache reply action as soon as seen
+        if (parsed.replyAction != null && parsed.remoteInput != null) {
+            ReplySender.cacheAction(parsed.conversationKey, parsed.replyAction, parsed.remoteInput)
+        }
+
         serviceScope.launch {
-            // Evaluate filters (whitelist, blacklist, groups, anti-spam, loop protection)
+            val contactRule = app.preferencesRepository.contactRulesFlow.value[parsed.senderName]
+
+            // 1. Evaluate smart rule evaluator (quiet hours, kill switch, whitelist, group modes)
+            val eval = SmartRuleEvaluator.evaluate(
+                senderName = parsed.senderName,
+                isGroup = parsed.isGroup,
+                settings = settings,
+                contactRule = contactRule
+            )
+            if (!eval.shouldProcess) {
+                return@launch
+            }
+
+            // 2. Evaluate message filter (cooldown, loops, daily limits)
             val filterResult = app.messageFilter.evaluate(parsed, settings)
             if (filterResult is FilterResult.Blocked) {
                 return@launch
             }
 
-            // Record this message in anti-spam tracker
-            app.messageFilter.recordProcessedMessage(parsed.conversationKey, parsed.messageText)
-
-            // Cache reply action if available
-            if (parsed.replyAction != null && parsed.remoteInput != null) {
-                ReplySender.cacheAction(parsed.conversationKey, parsed.replyAction, parsed.remoteInput)
+            // 3. Batching check: aggregate rapid-fire messages if enabled
+            if (settings.smartBatchingEnabled && settings.batchWindowSeconds > 0) {
+                batcher?.addMessage(
+                    conversationKey = parsed.conversationKey,
+                    senderName = parsed.senderName,
+                    messageText = parsed.messageText,
+                    windowSeconds = settings.batchWindowSeconds
+                )
+            } else {
+                handleBatchedMessage(parsed.conversationKey, parsed.senderName, parsed.messageText)
             }
+        }
+    }
+
+    private fun handleBatchedMessage(conversationKey: String, senderName: String, messageText: String) {
+        serviceScope.launch {
+            val app = ReplyMateApplication.instance
+            val settings = app.preferencesRepository.settingsFlow.value
+            val contactRule = app.preferencesRepository.contactRulesFlow.value[senderName]
+
+            // Record processed message in anti-spam tracker
+            app.messageFilter.recordProcessedMessage(conversationKey, messageText)
 
             // Save incoming message to local short-term conversation context
             app.database.conversationMessageDao().insert(
                 ConversationMessageEntity(
-                    conversationKey = parsed.conversationKey,
-                    sender = parsed.senderName,
-                    messageText = parsed.messageText,
+                    conversationKey = conversationKey,
+                    sender = senderName,
+                    messageText = messageText,
                     isFromMe = false,
-                    timestamp = parsed.timestamp
+                    timestamp = System.currentTimeMillis()
                 )
             )
 
             // Check emergency / sensitive message protection
-            val sensitivity = SensitiveMessageDetector.evaluate(parsed.messageText)
+            val sensitivity = SensitiveMessageDetector.evaluate(messageText)
             if (sensitivity.isSensitive) {
                 val reason = sensitivity.reason ?: "Potentially sensitive message — manual reply recommended."
                 app.database.pendingReplyDao().insert(
                     PendingReplyEntity(
-                        senderName = parsed.senderName,
-                        conversationKey = parsed.conversationKey,
-                        incomingMessage = parsed.messageText,
+                        senderName = senderName,
+                        conversationKey = conversationKey,
+                        incomingMessage = messageText,
                         suggestedReply = "Potentially sensitive message — manual reply recommended.",
                         timestamp = System.currentTimeMillis(),
                         status = PendingReplyEntity.STATUS_SENSITIVE_SKIPPED,
@@ -77,8 +118,8 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
 
                 app.database.replyLogDao().insert(
                     ReplyLogEntity(
-                        senderName = parsed.senderName,
-                        incomingMessage = parsed.messageText,
+                        senderName = senderName,
+                        incomingMessage = messageText,
                         replyText = "[Manual reply recommended: $reason]",
                         timestamp = System.currentTimeMillis(),
                         status = ReplyLogEntity.STATUS_SENSITIVE,
@@ -88,21 +129,24 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                 return@launch
             }
 
-            // Generate AI reply
+            // Generate AI reply with full contact intelligence & pro engine
             val aiResult = app.aiEngine.processIncomingMessage(
-                senderName = parsed.senderName,
-                conversationKey = parsed.conversationKey,
-                messageText = parsed.messageText,
-                settings = settings
+                senderName = senderName,
+                conversationKey = conversationKey,
+                messageText = messageText,
+                settings = settings,
+                contactRule = contactRule
             )
+
+            val isApprovalMode = contactRule?.approvalMode ?: settings.approvalMode
 
             when (aiResult) {
                 is AIReplyResult.Sensitive -> {
                     app.database.pendingReplyDao().insert(
                         PendingReplyEntity(
-                            senderName = parsed.senderName,
-                            conversationKey = parsed.conversationKey,
-                            incomingMessage = parsed.messageText,
+                            senderName = senderName,
+                            conversationKey = conversationKey,
+                            incomingMessage = messageText,
                             suggestedReply = "Potentially sensitive message — manual reply recommended.",
                             timestamp = System.currentTimeMillis(),
                             status = PendingReplyEntity.STATUS_SENSITIVE_SKIPPED,
@@ -113,13 +157,13 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                 }
 
                 is AIReplyResult.Success -> {
-                    if (settings.approvalMode) {
-                        // APPROVAL MODE: User must review in app
+                    if (isApprovalMode) {
+                        // APPROVAL MODE: User reviews & can regenerate / edit in app
                         val pendingId = app.database.pendingReplyDao().insert(
                             PendingReplyEntity(
-                                senderName = parsed.senderName,
-                                conversationKey = parsed.conversationKey,
-                                incomingMessage = parsed.messageText,
+                                senderName = senderName,
+                                conversationKey = conversationKey,
+                                incomingMessage = messageText,
                                 suggestedReply = aiResult.replyText,
                                 timestamp = System.currentTimeMillis(),
                                 status = PendingReplyEntity.STATUS_PENDING,
@@ -130,7 +174,7 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                         NotificationHelper.showApprovalNotification(
                             context = applicationContext,
                             pendingId = pendingId,
-                            sender = parsed.senderName,
+                            sender = senderName,
                             suggestedReply = aiResult.replyText
                         )
                     } else {
@@ -140,19 +184,17 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
 
                         val sent = ReplySender.sendReply(
                             context = applicationContext,
-                            conversationKey = parsed.conversationKey,
-                            replyText = aiResult.replyText,
-                            action = parsed.replyAction,
-                            remoteInput = parsed.remoteInput
+                            conversationKey = conversationKey,
+                            replyText = aiResult.replyText
                         )
 
                         if (sent) {
-                            app.messageFilter.incrementConsecutiveReplies(parsed.conversationKey)
+                            app.messageFilter.incrementConsecutiveReplies(conversationKey)
 
                             app.database.replyLogDao().insert(
                                 ReplyLogEntity(
-                                    senderName = parsed.senderName,
-                                    incomingMessage = parsed.messageText,
+                                    senderName = senderName,
+                                    incomingMessage = messageText,
                                     replyText = aiResult.replyText,
                                     timestamp = System.currentTimeMillis(),
                                     status = ReplyLogEntity.STATUS_AUTO_SENT,
@@ -163,7 +205,7 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                             // Add sent reply to context
                             app.database.conversationMessageDao().insert(
                                 ConversationMessageEntity(
-                                    conversationKey = parsed.conversationKey,
+                                    conversationKey = conversationKey,
                                     sender = "Me (AI)",
                                     messageText = aiResult.replyText,
                                     isFromMe = true,
@@ -173,8 +215,8 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                         } else {
                             app.database.replyLogDao().insert(
                                 ReplyLogEntity(
-                                    senderName = parsed.senderName,
-                                    incomingMessage = parsed.messageText,
+                                    senderName = senderName,
+                                    incomingMessage = messageText,
                                     replyText = aiResult.replyText,
                                     timestamp = System.currentTimeMillis(),
                                     status = ReplyLogEntity.STATUS_FAILED,
@@ -188,8 +230,8 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                 is AIReplyResult.Error -> {
                     app.database.replyLogDao().insert(
                         ReplyLogEntity(
-                            senderName = parsed.senderName,
-                            incomingMessage = parsed.messageText,
+                            senderName = senderName,
+                            incomingMessage = messageText,
                             replyText = "[Error: ${aiResult.errorMessage}]",
                             timestamp = System.currentTimeMillis(),
                             status = ReplyLogEntity.STATUS_FAILED,
@@ -203,10 +245,5 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
         super.onNotificationRemoved(sbn)
-        // Clean up cached action if notification dismissed
-        val parsed = sbn?.let { NotificationParser.parse(it) }
-        if (parsed != null) {
-            // Keep action cached for a short grace period in case user is approving
-        }
     }
 }
