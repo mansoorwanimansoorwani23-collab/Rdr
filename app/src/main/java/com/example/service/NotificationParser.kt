@@ -17,7 +17,9 @@ data class ParsedWhatsAppNotification(
     val timestamp: Long,
     val replyAction: Notification.Action?,
     val remoteInput: RemoteInput?,
-    val packageName: String
+    val packageName: String,
+    val isSummaryNotification: Boolean = false,
+    val isIndividualMessage: Boolean = true
 ) {
     val hasReplyAction: Boolean get() = replyAction != null && remoteInput != null
 }
@@ -52,167 +54,24 @@ object NotificationParser {
         sbn: StatusBarNotification,
         selectedPackageSetting: String = "both"
     ): ParsedWhatsAppNotification? {
-        val notification = sbn.notification ?: return null
-        val extras = notification.extras ?: return null
-        val pkg = sbn.packageName ?: return null
-
-        // 1. Verify WhatsApp package
-        if (!WhatsAppPackageDetector.isPackageAllowed(pkg, selectedPackageSetting)) {
+        val result = WhatsAppNotificationParser.parse(sbn, selectedPackageSetting)
+        if (!result.isWhatsApp) {
             return null
         }
-
-        // 2. Extract reply action first (even if summary, some Wearable/OS summaries have reply actions)
-        val (replyAction, remoteInput) = extractReplyAction(notification)
-
-        // 3. Extract sender, titles, and group indicators
-        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim() ?: ""
-        val conversationTitle = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString()?.trim()
-        val isExplicitGroup = extras.getBoolean("android.isGroupConversation", false)
-
-        var extractedSender = ""
-        var extractedGroupTitle: String? = null
-        var isGroup = false
-        var isSelfSent = false
-
-        if (!conversationTitle.isNullOrBlank()) {
-            isGroup = true
-            extractedGroupTitle = conversationTitle
-            extractedSender = if (title.isNotBlank()) title else conversationTitle
-        } else if (isExplicitGroup) {
-            isGroup = true
-            extractedGroupTitle = title.ifBlank { "WhatsApp Group" }
-            extractedSender = title.ifBlank { "WhatsApp Contact" }
-        } else {
-            extractedSender = title.ifBlank { "WhatsApp Contact" }
-        }
-
-        // 4. Extract message text using multi-layer extraction
-        var messageText = ""
-
-        // Layer A: Parse framework EXTRA_MESSAGES bundle array (standard in modern Android MessagingStyle)
-        try {
-            val rawMessages = extras.getParcelableArray("android.messages")
-                ?: extras.getParcelableArray(Notification.EXTRA_MESSAGES)
-            if (rawMessages != null && rawMessages.isNotEmpty()) {
-                val lastMsgBundle = rawMessages.lastOrNull() as? Bundle
-                if (lastMsgBundle != null) {
-                    val text = lastMsgBundle.getCharSequence("text")?.toString()?.trim() ?: ""
-                    val sender = lastMsgBundle.getCharSequence("sender")?.toString()?.trim()
-                    if (text.isNotBlank()) {
-                        messageText = text
-                        if (!sender.isNullOrBlank()) {
-                            // Check if the sender is "You" or indicates outgoing
-                            if (sender.equals("You", ignoreCase = true) || sender.equals("Aap", ignoreCase = true)) {
-                                isSelfSent = true
-                            } else {
-                                extractedSender = sender
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            // Fall through to next layer
-        }
-
-        // Layer B: NotificationCompat MessagingStyle
-        if (messageText.isBlank()) {
-            try {
-                val messagingStyle = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification)
-                if (messagingStyle != null) {
-                    if (messagingStyle.isGroupConversation) {
-                        isGroup = true
-                        messagingStyle.conversationTitle?.toString()?.let { extractedGroupTitle = it }
-                    }
-                    val msgs = messagingStyle.messages
-                    if (msgs.isNotEmpty()) {
-                        val lastMsg = msgs.last()
-                        val text = lastMsg.text?.toString()?.trim() ?: ""
-                        if (text.isNotBlank()) {
-                            messageText = text
-                            val senderName = lastMsg.person?.name?.toString()?.trim()
-                            if (senderName != null) {
-                                if (senderName.equals("You", ignoreCase = true)) {
-                                    isSelfSent = true
-                                } else {
-                                    extractedSender = senderName
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                // Fall through
-            }
-        }
-
-        // Layer C: Notification.EXTRA_BIG_TEXT
-        if (messageText.isBlank()) {
-            messageText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.trim() ?: ""
-        }
-
-        // Layer D: Notification.EXTRA_TEXT
-        if (messageText.isBlank()) {
-            messageText = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim() ?: ""
-        }
-
-        // Layer E: Notification.EXTRA_TEXT_LINES (InboxStyle lines)
-        if (messageText.isBlank()) {
-            val textLines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
-            if (!textLines.isNullOrEmpty()) {
-                val lastLine = textLines.lastOrNull()?.toString()?.trim() ?: ""
-                if (lastLine.isNotBlank()) {
-                    // Check if format is "Sender: message"
-                    val colonIndex = lastLine.indexOf(':')
-                    if (colonIndex > 0 && colonIndex < lastLine.length - 1) {
-                        val possibleSender = lastLine.substring(0, colonIndex).trim()
-                        val possibleText = lastLine.substring(colonIndex + 1).trim()
-                        if (possibleSender.isNotBlank() && possibleText.isNotBlank()) {
-                            extractedSender = possibleSender
-                            messageText = possibleText
-                        } else {
-                            messageText = lastLine
-                        }
-                    } else {
-                        messageText = lastLine
-                    }
-                }
-            }
-        }
-
-        // If message is still empty and it is a pure group summary with no content, discard
-        if (messageText.isBlank()) {
-            return null
-        }
-
-        // Detect if outgoing self-sent message ("You: ...")
-        if (messageText.startsWith("You:", ignoreCase = true) ||
-            messageText.startsWith("Aap:", ignoreCase = true) ||
-            extractedSender.equals("You", ignoreCase = true)
-        ) {
-            isSelfSent = true
-        }
-
-        // Filter system WhatsApp notifications
-        if (isSystemOrCallMessage(messageText, extractedSender)) {
-            return null
-        }
-
-        // Derive stable conversationKey
-        val conversationKey = sbn.tag?.takeIf { it.isNotBlank() }
-            ?: (if (isGroup && !extractedGroupTitle.isNullOrBlank()) extractedGroupTitle!! else extractedSender)
 
         return ParsedWhatsAppNotification(
-            conversationKey = conversationKey,
-            senderName = extractedSender,
-            messageText = messageText,
-            isGroup = isGroup,
-            groupTitle = extractedGroupTitle,
-            isSelfSent = isSelfSent,
-            timestamp = sbn.postTime,
-            replyAction = replyAction,
-            remoteInput = remoteInput,
-            packageName = pkg
+            conversationKey = result.conversationId,
+            senderName = result.sender,
+            messageText = result.messageText,
+            isGroup = result.isGroup,
+            groupTitle = result.groupTitle,
+            isSelfSent = result.isSelfSent,
+            timestamp = result.timestamp,
+            replyAction = result.replyAction,
+            remoteInput = result.remoteInput,
+            packageName = result.packageName,
+            isSummaryNotification = result.isSummaryNotification,
+            isIndividualMessage = result.isIndividualMessage
         )
     }
 

@@ -698,32 +698,114 @@ fun MainScreen(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        Button(
-                            onClick = {
-                                viewModel.simulateTestIncomingMessage(
-                                    sender = simSenderInput,
-                                    message = simMessageInput
-                                )
-                            },
-                            enabled = !uiState.isTestingSim && simSenderInput.isNotBlank() && simMessageInput.isNotBlank(),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(46.dp)
-                                .testTag("run_simulation_button")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            if (uiState.isTestingSim) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.onPrimary
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Analyzing & Generating...")
-                            } else {
-                                Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Run Simulation Test")
+                            Button(
+                                onClick = {
+                                    viewModel.simulateTestIncomingMessage(
+                                        sender = simSenderInput,
+                                        message = simMessageInput
+                                    )
+                                },
+                                enabled = !uiState.isTestingSim && !uiState.isRunningReplyTest && simSenderInput.isNotBlank() && simMessageInput.isNotBlank(),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(46.dp)
+                                    .testTag("run_simulation_button")
+                            ) {
+                                if (uiState.isTestingSim) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Testing...")
+                                } else {
+                                    Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Simulate AI")
+                                }
+                            }
+
+                            FilledTonalButton(
+                                onClick = {
+                                    viewModel.runReplyTest(
+                                        sender = simSenderInput,
+                                        message = simMessageInput
+                                    )
+                                },
+                                enabled = !uiState.isRunningReplyTest && !uiState.isTestingSim && simSenderInput.isNotBlank() && simMessageInput.isNotBlank(),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1.2f)
+                                    .height(46.dp)
+                                    .testTag("run_reply_test_main_button")
+                            ) {
+                                if (uiState.isRunningReplyTest) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Auditing...")
+                                } else {
+                                    Icon(imageVector = Icons.Default.BugReport, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Run Reply Test")
+                                }
+                            }
+                        }
+
+                        AnimatedVisibility(visible = uiState.replyTestResult != null) {
+                            uiState.replyTestResult?.let { testResult ->
+                                Card(
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 10.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Reply Test Result (${testResult.finalStatus})",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            IconButton(onClick = { viewModel.clearReplyTestResult() }, modifier = Modifier.size(20.dp)) {
+                                                Icon(imageVector = Icons.Default.Refresh, contentDescription = "Clear", modifier = Modifier.size(14.dp))
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        testResult.steps.forEach { step ->
+                                            Text(
+                                                text = "${if (step.isSuccess) "✓" else "⚠"} ${step.stepName}: ${step.details}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = if (step.isSuccess) MaterialTheme.colorScheme.onSurfaceVariant else AlertAmber,
+                                                modifier = Modifier.padding(vertical = 2.dp)
+                                            )
+                                        }
+                                        if (!testResult.generatedReply.isNullOrBlank()) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "AI Reply: \"${testResult.generatedReply}\"",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = AlertGreen
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
 

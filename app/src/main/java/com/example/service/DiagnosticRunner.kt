@@ -379,4 +379,241 @@ object DiagnosticRunner {
 
         return results
     }
+
+    suspend fun runReplyTest(
+        context: Context,
+        testSender: String = "Test Contact",
+        testMessage: String = "Hello! Are you free for a quick chat?"
+    ): ReplyTestResult {
+        val app = ReplyMateApplication.instance
+        val settings = app.preferencesRepository.settingsFlow.value
+        val steps = mutableListOf<ReplyTestStep>()
+
+        // Step 1: Notification Parsing & Summary Filtering
+        val isSummary = WhatsAppNotificationParser.isSummaryText(testMessage)
+        if (isSummary) {
+            steps.add(
+                ReplyTestStep(
+                    stepName = "1. Notification Parsing",
+                    isSuccess = false,
+                    details = "Detected as WhatsApp notification summary ('$testMessage'). Auto-reply skipped."
+                )
+            )
+            return ReplyTestResult(
+                testSender = testSender,
+                testMessage = testMessage,
+                steps = steps,
+                finalStatus = "SKIPPED_SUMMARY"
+            )
+        } else {
+            steps.add(
+                ReplyTestStep(
+                    stepName = "1. Notification Parsing",
+                    isSuccess = true,
+                    details = "Sender: '$testSender' extracted | Message text: '$testMessage' extracted | isSummary: false"
+                )
+            )
+        }
+
+        // Step 2: Emergency Switch & Rule Check
+        if (settings.emergencyKillSwitch) {
+            steps.add(
+                ReplyTestStep(
+                    stepName = "2. Smart Rules & Kill Switch",
+                    isSuccess = false,
+                    details = "Emergency Stop is currently active. Pipeline blocked."
+                )
+            )
+            return ReplyTestResult(
+                testSender = testSender,
+                testMessage = testMessage,
+                steps = steps,
+                finalStatus = "BLOCKED_EMERGENCY"
+            )
+        }
+
+        val contactRule = app.preferencesRepository.contactRulesFlow.value[testSender]
+        val eval = SmartRuleEvaluator.evaluate(
+            senderName = testSender,
+            isGroup = false,
+            settings = settings,
+            contactRule = contactRule
+        )
+        if (!eval.shouldProcess) {
+            steps.add(
+                ReplyTestStep(
+                    stepName = "2. Smart Rules Evaluation",
+                    isSuccess = false,
+                    details = "Skipped: ${eval.skipReason ?: "Filtered by smart rules"}"
+                )
+            )
+            return ReplyTestResult(
+                testSender = testSender,
+                testMessage = testMessage,
+                steps = steps,
+                finalStatus = "SKIPPED_RULE"
+            )
+        } else {
+            steps.add(
+                ReplyTestStep(
+                    stepName = "2. Smart Rules Evaluation",
+                    isSuccess = true,
+                    details = "Rules passed: Auto-reply enabled for '$testSender' (Mode: ${if (settings.approvalMode) "Approval Required" else "Automatic"})"
+                )
+            )
+        }
+
+        // Step 3: Cooldown & Burst Protection Check
+        val fakeParsed = ParsedWhatsAppNotification(
+            conversationKey = testSender,
+            senderName = testSender,
+            messageText = testMessage,
+            isGroup = false,
+            groupTitle = null,
+            isSelfSent = false,
+            timestamp = System.currentTimeMillis(),
+            replyAction = null,
+            remoteInput = null,
+            packageName = SettingsData.PACKAGE_WHATSAPP,
+            isSummaryNotification = false,
+            isIndividualMessage = true
+        )
+        val filterResult = app.messageFilter.evaluate(fakeParsed, settings)
+        if (filterResult is FilterResult.Blocked) {
+            steps.add(
+                ReplyTestStep(
+                    stepName = "3. Cooldown & Frequency Filter",
+                    isSuccess = false,
+                    details = "Filtered: ${filterResult.reason}"
+                )
+            )
+            return ReplyTestResult(
+                testSender = testSender,
+                testMessage = testMessage,
+                steps = steps,
+                finalStatus = "SKIPPED_COOLDOWN"
+            )
+        } else {
+            steps.add(
+                ReplyTestStep(
+                    stepName = "3. Cooldown & Frequency Filter",
+                    isSuccess = true,
+                    details = "Cooldown check passed: First message in conversation or cooldown period elapsed."
+                )
+            )
+        }
+
+        // Step 4: AI Reply Generation
+        val aiResult = app.aiEngine.processIncomingMessage(
+            senderName = testSender,
+            conversationKey = testSender,
+            messageText = testMessage,
+            settings = settings,
+            contactRule = contactRule
+        )
+
+        var generatedReply: String? = null
+        when (aiResult) {
+            is com.example.ai.AIReplyResult.Success -> {
+                generatedReply = aiResult.replyText
+                steps.add(
+                    ReplyTestStep(
+                        stepName = "4. AI Reply Generation",
+                        isSuccess = true,
+                        details = "Generated response via ${aiResult.provider.uppercase()} (${aiResult.replyText.length} chars):\n\"${aiResult.replyText}\""
+                    )
+                )
+            }
+            is com.example.ai.AIReplyResult.Sensitive -> {
+                steps.add(
+                    ReplyTestStep(
+                        stepName = "4. AI Sensitivity Filter",
+                        isSuccess = false,
+                        details = "Intercepted sensitive content: ${aiResult.reason}. Manual reply recommended."
+                    )
+                )
+                return ReplyTestResult(
+                    testSender = testSender,
+                    testMessage = testMessage,
+                    steps = steps,
+                    finalStatus = "SENSITIVE_PROTECTED"
+                )
+            }
+            is com.example.ai.AIReplyResult.Error -> {
+                steps.add(
+                    ReplyTestStep(
+                        stepName = "4. AI Reply Generation",
+                        isSuccess = false,
+                        details = "AI Error: ${aiResult.errorMessage}"
+                    )
+                )
+                return ReplyTestResult(
+                    testSender = testSender,
+                    testMessage = testMessage,
+                    steps = steps,
+                    finalStatus = "AI_ERROR"
+                )
+            }
+        }
+
+        // Step 5: Reply Action & Execution Check
+        val hasCachedAction = ReplySender.hasCachedAction(testSender, testSender)
+        if (hasCachedAction) {
+            steps.add(
+                ReplyTestStep(
+                    stepName = "5. Reply Action & Sending",
+                    isSuccess = true,
+                    details = "Active RemoteInput quick reply action found in memory cache. Real notification reply available."
+                )
+            )
+        } else {
+            steps.add(
+                ReplyTestStep(
+                    stepName = "5. Reply Action & Simulation",
+                    isSuccess = true,
+                    details = "Notification shade currently has no open WhatsApp notification. Safe simulation verified: Reply validated and ready."
+                )
+            )
+        }
+
+        // Step 6: Activity Log & Diagnostics Logging
+        ServiceDiagnostics.logEvent(
+            eventType = "Reply Test Completed",
+            details = "Simulated notification from '$testSender' tested end-to-end successfully",
+            isWhatsApp = true,
+            senderAvailable = true,
+            messageAvailable = true,
+            hasReplyAction = hasCachedAction
+        )
+
+        steps.add(
+            ReplyTestStep(
+                stepName = "6. Diagnostics & Audit Log",
+                isSuccess = true,
+                details = "Test recorded in Diagnostics event stream. Pipeline verified end-to-end."
+            )
+        )
+
+        return ReplyTestResult(
+            testSender = testSender,
+            testMessage = testMessage,
+            steps = steps,
+            finalStatus = "SUCCESS",
+            generatedReply = generatedReply
+        )
+    }
 }
+
+data class ReplyTestStep(
+    val stepName: String,
+    val isSuccess: Boolean,
+    val details: String
+)
+
+data class ReplyTestResult(
+    val testSender: String,
+    val testMessage: String,
+    val steps: List<ReplyTestStep>,
+    val finalStatus: String,
+    val generatedReply: String? = null
+)

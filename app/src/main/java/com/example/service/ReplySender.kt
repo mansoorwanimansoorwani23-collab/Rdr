@@ -53,7 +53,7 @@ object ReplySender {
         val targetPair = if (action != null && remoteInput != null) {
             Pair(action, remoteInput)
         } else {
-            actionCache[conversationKey] ?: (!senderName.isNullOrBlank()).let { actionCache[senderName] }
+            actionCache[conversationKey] ?: if (!senderName.isNullOrBlank()) actionCache[senderName] else null
         } ?: return false
 
         val targetAction = targetPair.first

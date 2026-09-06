@@ -19,6 +19,7 @@ data class ReplyLogEntity(
         const val STATUS_PARSED = "PARSED"
         const val STATUS_IGNORED = "IGNORED"
         const val STATUS_PROCESSING = "PROCESSING"
+        const val STATUS_GENERATED = "GENERATED"
         const val STATUS_APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
         const val STATUS_AUTO_SENT = "AUTO_SENT"
         const val STATUS_MANUAL_SENT = "MANUAL_SENT"

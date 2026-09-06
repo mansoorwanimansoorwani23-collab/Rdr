@@ -74,6 +74,39 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
             return
         }
 
+        // WhatsApp Summary Notification Check (e.g. "158 messages from 2 chats")
+        // Summary notifications must be ignored for AI processing and logged explicitly
+        if (parsed.isSummaryNotification) {
+            ServiceDiagnostics.logEvent(
+                eventType = "WhatsApp Summary Ignored",
+                details = "WhatsApp notification summary ignored ('${parsed.messageText}')",
+                isWhatsApp = true
+            )
+            serviceScope.launch {
+                app.database.replyLogDao().insert(
+                    ReplyLogEntity(
+                        senderName = parsed.senderName.ifBlank { "WhatsApp" },
+                        incomingMessage = parsed.messageText,
+                        replyText = "Auto-reply skipped: WhatsApp notification summary ignored",
+                        timestamp = System.currentTimeMillis(),
+                        status = ReplyLogEntity.STATUS_IGNORED,
+                        provider = settings.aiProvider
+                    )
+                )
+            }
+            return
+        }
+
+        // Non-individual message or empty text check
+        if (!parsed.isIndividualMessage || parsed.messageText.isBlank()) {
+            ServiceDiagnostics.logEvent(
+                eventType = "WhatsApp Notification Skipped",
+                details = "No message text found in notification",
+                isWhatsApp = true
+            )
+            return
+        }
+
         // Self-sent outgoing message check
         if (parsed.isSelfSent) {
             ServiceDiagnostics.logEvent(
@@ -86,6 +119,7 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
 
         // Update diagnostics with extracted info
         ServiceDiagnostics.updateWhatsAppDetails(parsed.senderName, parsed.hasReplyAction)
+        ServiceDiagnostics.updateMessageTextAvailable(true)
         ServiceDiagnostics.logEvent(
             eventType = "WhatsApp Message Detected",
             details = "Sender: Available ('${parsed.senderName}'), Text: Available, Action: ${if (parsed.hasReplyAction) "Available" else "Unavailable"}",
@@ -111,7 +145,7 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                 ReplyLogEntity(
                     senderName = parsed.senderName,
                     incomingMessage = parsed.messageText,
-                    replyText = "WhatsApp notification received",
+                    replyText = "WhatsApp message received from ${parsed.senderName}",
                     timestamp = System.currentTimeMillis(),
                     status = ReplyLogEntity.STATUS_RECEIVED,
                     provider = settings.aiProvider
@@ -228,7 +262,8 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
             val settings = app.preferencesRepository.settingsFlow.value
             val contactRule = app.preferencesRepository.contactRulesFlow.value[senderName]
 
-            app.messageFilter.recordProcessedMessage(conversationKey, messageText)
+            // Record received message for duplicate suppression only (does NOT start cooldown)
+            app.messageFilter.recordReceivedMessage(conversationKey, messageText)
 
             // Save incoming message to local conversation history
             app.database.conversationMessageDao().insert(
@@ -268,7 +303,7 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                     ReplyLogEntity(
                         senderName = senderName,
                         incomingMessage = messageText,
-                        replyText = "[Manual reply recommended: $reason]",
+                        replyText = "Auto-reply skipped: Sensitive message detected ($reason)",
                         timestamp = System.currentTimeMillis(),
                         status = ReplyLogEntity.STATUS_SENSITIVE,
                         provider = settings.aiProvider
@@ -311,7 +346,7 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                         ReplyLogEntity(
                             senderName = senderName,
                             incomingMessage = messageText,
-                            replyText = "[Manual reply recommended: ${aiResult.reason}]",
+                            replyText = "Auto-reply skipped: Sensitive message detected (${aiResult.reason})",
                             timestamp = System.currentTimeMillis(),
                             status = ReplyLogEntity.STATUS_SENSITIVE,
                             provider = settings.aiProvider
@@ -322,12 +357,24 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                 is AIReplyResult.Success -> {
                     ServiceDiagnostics.logEvent(
                         eventType = "AI Response Generated",
-                        details = "Reply generated (${aiResult.replyText.length} chars) via ${aiResult.provider}",
+                        details = "AI reply generated (${aiResult.replyText.length} chars) via ${aiResult.provider}",
                         isWhatsApp = true
                     )
 
+                    // Log AI generation stage
+                    app.database.replyLogDao().insert(
+                        ReplyLogEntity(
+                            senderName = senderName,
+                            incomingMessage = messageText,
+                            replyText = "AI reply generated",
+                            timestamp = System.currentTimeMillis(),
+                            status = ReplyLogEntity.STATUS_GENERATED,
+                            provider = aiResult.provider
+                        )
+                    )
+
                     if (isApprovalMode) {
-                        // APPROVAL MODE: User reviews & can regenerate / edit in app
+                        // APPROVAL MODE: User reviews & can edit/send in app
                         val pendingId = app.database.pendingReplyDao().insert(
                             PendingReplyEntity(
                                 senderName = senderName,
@@ -359,7 +406,7 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                         )
                         ServiceDiagnostics.logEvent(
                             eventType = "Approval Required",
-                            details = "Created pending card for review",
+                            details = "Created pending card for manual review",
                             isWhatsApp = true
                         )
                     } else {
@@ -371,7 +418,7 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                                 ReplyLogEntity(
                                     senderName = senderName,
                                     incomingMessage = messageText,
-                                    replyText = "[Automatic reply unavailable: WhatsApp notification did not provide a reply action]",
+                                    replyText = "Auto-reply skipped: No reply action available (WhatsApp reply action not available for this notification)",
                                     timestamp = System.currentTimeMillis(),
                                     status = ReplyLogEntity.STATUS_NO_ACTION,
                                     provider = aiResult.provider
@@ -379,9 +426,10 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                             )
                             ServiceDiagnostics.logEvent(
                                 eventType = "Reply Action Missing",
-                                details = "Notification did not supply a RemoteInput reply action",
+                                details = "WhatsApp reply action not available for this notification",
                                 isWhatsApp = true
                             )
+                            ServiceDiagnostics.updateError("WhatsApp reply action not available for this notification")
                             return@launch
                         }
 
@@ -397,13 +445,15 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                         )
 
                         if (sent) {
+                            // Cooldown ONLY starts upon successful reply sending!
+                            app.messageFilter.recordSuccessfulReply(conversationKey)
                             app.messageFilter.incrementConsecutiveReplies(conversationKey)
 
                             app.database.replyLogDao().insert(
                                 ReplyLogEntity(
                                     senderName = senderName,
                                     incomingMessage = messageText,
-                                    replyText = aiResult.replyText,
+                                    replyText = "Auto-reply sent to $senderName: ${aiResult.replyText}",
                                     timestamp = System.currentTimeMillis(),
                                     status = ReplyLogEntity.STATUS_AUTO_SENT,
                                     provider = aiResult.provider
@@ -426,12 +476,14 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                                 isWhatsApp = true,
                                 hasReplyAction = true
                             )
+                            ServiceDiagnostics.updateError(null)
                         } else {
+                            // Reply action failed - DO NOT start cooldown!
                             app.database.replyLogDao().insert(
                                 ReplyLogEntity(
                                     senderName = senderName,
                                     incomingMessage = messageText,
-                                    replyText = "[Failed to send via WhatsApp notification: ${aiResult.replyText}]",
+                                    replyText = "Failed to send reply via WhatsApp notification",
                                     timestamp = System.currentTimeMillis(),
                                     status = ReplyLogEntity.STATUS_FAILED,
                                     provider = aiResult.provider
@@ -439,19 +491,21 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                             )
                             ServiceDiagnostics.logEvent(
                                 eventType = "Reply Failed",
-                                details = "Failed to send Intent via WhatsApp RemoteInput",
+                                details = "Failed to send reply via WhatsApp notification",
                                 isWhatsApp = true
                             )
+                            ServiceDiagnostics.updateError("Failed to send reply via WhatsApp notification")
                         }
                     }
                 }
 
                 is AIReplyResult.Error -> {
+                    // AI Generation failed - DO NOT start cooldown!
                     app.database.replyLogDao().insert(
                         ReplyLogEntity(
                             senderName = senderName,
                             incomingMessage = messageText,
-                            replyText = "[AI Generation Error: ${aiResult.errorMessage}]",
+                            replyText = "Auto-reply failed: AI error (${aiResult.errorMessage})",
                             timestamp = System.currentTimeMillis(),
                             status = ReplyLogEntity.STATUS_FAILED,
                             provider = settings.aiProvider
@@ -462,6 +516,7 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                         details = aiResult.errorMessage,
                         isWhatsApp = true
                     )
+                    ServiceDiagnostics.updateError(aiResult.errorMessage)
                 }
             }
         }

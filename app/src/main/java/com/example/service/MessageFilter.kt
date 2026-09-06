@@ -12,9 +12,14 @@ sealed class FilterResult {
 
 class MessageFilter(private val database: AppDatabase) {
 
-    // Tracks last message timestamp per conversation key for cooldown & duplicate detection
-    private val lastMessageTimestamps = ConcurrentHashMap<String, Long>()
-    private val lastProcessedTexts = ConcurrentHashMap<String, String>()
+    // Tracks last SUCCESSFUL reply timestamp per conversation key.
+    // Cooldown must ONLY be updated AFTER a reply is actually successfully sent.
+    // First message will have lastReply = 0L, so it is never blocked.
+    private val lastReplyTimestamps = ConcurrentHashMap<String, Long>()
+
+    // Duplicate notification prevention (distinct from reply cooldown)
+    private val lastReceivedMessageTexts = ConcurrentHashMap<String, String>()
+    private val lastReceivedMessageTimestamps = ConcurrentHashMap<String, Long>()
 
     // Loop prevention: tracks consecutive AI replies sent without user intervention
     private val consecutiveReplyCounters = ConcurrentHashMap<String, Int>()
@@ -59,19 +64,22 @@ class MessageFilter(private val database: AppDatabase) {
             }
         }
 
-        // 5. Check duplicate message
-        val lastText = lastProcessedTexts[parsed.conversationKey]
-        val lastTimestamp = lastMessageTimestamps[parsed.conversationKey] ?: 0L
         val now = System.currentTimeMillis()
 
-        if (lastText != null && lastText == parsed.messageText && (now - lastTimestamp) < 15_000L) {
+        // 5. Check duplicate message (short 5-second window for exact identical text spam)
+        val lastText = lastReceivedMessageTexts[parsed.conversationKey]
+        val lastReceivedTime = lastReceivedMessageTimestamps[parsed.conversationKey] ?: 0L
+        if (lastText != null && lastText == parsed.messageText && (now - lastReceivedTime) < 5_000L) {
             return FilterResult.Blocked("Duplicate notification detected.")
         }
 
-        // 6. Anti-spam cooldown per conversation
-        val cooldownMs = (settings.conversationCooldownSeconds * 1000L).coerceAtLeast(5_000L)
-        if (now - lastTimestamp < cooldownMs) {
-            return FilterResult.Blocked("Cooldown active for this conversation (${cooldownMs / 1000}s).")
+        // 6. Anti-spam cooldown per conversation based on last SUCCESSFUL reply
+        // If no reply has been sent yet to this conversation (lastReply == 0L), ALLOW immediately!
+        val lastReply = lastReplyTimestamps[parsed.conversationKey] ?: 0L
+        val cooldownMs = settings.conversationCooldownSeconds * 1000L
+        if (lastReply > 0L && (now - lastReply) < cooldownMs) {
+            val remainingSec = ((cooldownMs - (now - lastReply)) / 1000L).coerceAtLeast(1L)
+            return FilterResult.Blocked("Cooldown active for this conversation (${remainingSec}s).")
         }
 
         // 7. Loop prevention: check max consecutive replies
@@ -90,9 +98,36 @@ class MessageFilter(private val database: AppDatabase) {
         return FilterResult.Allowed
     }
 
-    fun recordProcessedMessage(conversationKey: String, messageText: String) {
-        lastMessageTimestamps[conversationKey] = System.currentTimeMillis()
-        lastProcessedTexts[conversationKey] = messageText
+    /**
+     * Record receipt of an incoming message for duplicate suppression only.
+     * Note: This does NOT start the cooldown!
+     */
+    fun recordReceivedMessage(conversationKey: String, messageText: String) {
+        lastReceivedMessageTexts[conversationKey] = messageText
+        lastReceivedMessageTimestamps[conversationKey] = System.currentTimeMillis()
+    }
+
+    /**
+     * Call ONLY after a reply has actually been successfully sent.
+     * This starts the cooldown for this specific conversation.
+     */
+    fun recordSuccessfulReply(conversationKey: String) {
+        lastReplyTimestamps[conversationKey] = System.currentTimeMillis()
+    }
+
+    fun getLastReplyTimestamp(conversationKey: String): Long {
+        return lastReplyTimestamps[conversationKey] ?: 0L
+    }
+
+    fun clearCooldown(conversationKey: String) {
+        lastReplyTimestamps.remove(conversationKey)
+    }
+
+    fun clearAllCooldowns() {
+        lastReplyTimestamps.clear()
+        lastReceivedMessageTexts.clear()
+        lastReceivedMessageTimestamps.clear()
+        consecutiveReplyCounters.clear()
     }
 
     fun incrementConsecutiveReplies(conversationKey: String) {
@@ -113,3 +148,4 @@ class MessageFilter(private val database: AppDatabase) {
         return cal.timeInMillis
     }
 }
+

@@ -39,6 +39,12 @@ object ServiceDiagnostics {
     private val _lastReplyActionAvailable = MutableStateFlow(false)
     val lastReplyActionAvailable: StateFlow<Boolean> = _lastReplyActionAvailable.asStateFlow()
 
+    private val _lastMessageTextAvailable = MutableStateFlow(false)
+    val lastMessageTextAvailable: StateFlow<Boolean> = _lastMessageTextAvailable.asStateFlow()
+
+    private val _lastError = MutableStateFlow<String?>(null)
+    val lastError: StateFlow<String?> = _lastError.asStateFlow()
+
     private val _events = MutableStateFlow<List<DiagnosticLogEntry>>(emptyList())
     val events: StateFlow<List<DiagnosticLogEntry>> = _events.asStateFlow()
 
@@ -74,6 +80,14 @@ object ServiceDiagnostics {
         _lastReplyActionAvailable.value = hasReplyAction
     }
 
+    fun updateMessageTextAvailable(available: Boolean) {
+        _lastMessageTextAvailable.value = available
+    }
+
+    fun updateError(error: String?) {
+        _lastError.value = error
+    }
+
     fun logEvent(
         eventType: String,
         details: String,
@@ -105,5 +119,7 @@ object ServiceDiagnostics {
         _whatsappNotificationsCount.value = 0
         _lastWhatsAppSender.value = null
         _lastReplyActionAvailable.value = false
+        _lastMessageTextAvailable.value = false
+        _lastError.value = null
     }
 }

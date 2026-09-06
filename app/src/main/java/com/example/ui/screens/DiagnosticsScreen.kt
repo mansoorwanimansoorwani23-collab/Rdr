@@ -42,6 +42,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -49,6 +50,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,6 +65,8 @@ import androidx.compose.ui.unit.sp
 import com.example.service.DiagnosticItemResult
 import com.example.service.DiagnosticLogEntry
 import com.example.service.DiagnosticStatus
+import com.example.service.ReplyTestResult
+import com.example.service.ReplyTestStep
 import com.example.ui.ReplyMateUiState
 import com.example.ui.ReplyMateViewModel
 import com.example.ui.theme.AlertAmber
@@ -170,6 +177,15 @@ fun DiagnosticsScreen(
                         Text("RUN FULL DIAGNOSTICS", fontWeight = FontWeight.Bold)
                     }
                 }
+            }
+
+            // 2b. Run Reply Test Section
+            item {
+                ReplyTestSectionCard(
+                    uiState = uiState,
+                    onRunTest = { sender, msg -> viewModel.runReplyTest(sender, msg) },
+                    onClear = { viewModel.clearReplyTestResult() }
+                )
             }
 
             // 3. 15 Diagnostic Tests Results
@@ -302,6 +318,73 @@ private fun PipelineStatusCard(
                         Text("Reconnect")
                     }
                 }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = "REAL-TIME NOTIFICATION STATUS",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            StatusRow(
+                label = "Last WhatsApp notification detected",
+                status = if (uiState.lastWhatsAppNotificationDetected) "YES" else "NO",
+                isOk = uiState.lastWhatsAppNotificationDetected
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            StatusRow(
+                label = "Sender detected",
+                status = if (uiState.lastSenderAvailable) "AVAILABLE" else "NOT AVAILABLE",
+                isOk = uiState.lastSenderAvailable
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            StatusRow(
+                label = "Message text detected",
+                status = if (uiState.lastMessageTextAvailable) "AVAILABLE" else "NOT AVAILABLE",
+                isOk = uiState.lastMessageTextAvailable
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            StatusRow(
+                label = "Reply action",
+                status = if (uiState.lastReplyActionAvailable) "AVAILABLE" else "NOT AVAILABLE",
+                isOk = uiState.lastReplyActionAvailable
+            )
+
+            if (!uiState.lastError.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Card(
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(containerColor = AlertRed.copy(alpha = 0.12f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = "Last error:",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = AlertRed
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = uiState.lastError ?: "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AlertRed
+                        )
+                    }
+                }
+            } else {
+                Spacer(modifier = Modifier.height(6.dp))
+                StatusRow(
+                    label = "Last error",
+                    status = "None",
+                    isOk = true
+                )
             }
         }
     }
@@ -609,3 +692,204 @@ private fun TroubleshootingGuideCard(onOpenNotificationSettings: () -> Unit) {
         }
     }
 }
+
+@Composable
+private fun ReplyTestSectionCard(
+    uiState: ReplyMateUiState,
+    onRunTest: (String, String) -> Unit,
+    onClear: () -> Unit
+) {
+    var testSender by remember { mutableStateOf("Rahul") }
+    var testMessage by remember { mutableStateOf("Hey! Are you available to connect today?") }
+
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("reply_test_card")
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.BugReport,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = "Run Reply Test",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "End-to-end pipeline simulation audit",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                if (uiState.replyTestResult != null) {
+                    IconButton(onClick = onClear) {
+                        Icon(imageVector = Icons.Default.Delete, contentDescription = "Clear result")
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = "Simulates an incoming WhatsApp notification through the entire pipeline: parsing → rule check → cooldown check → AI generation → reply execution / safe simulation.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedTextField(
+                value = testSender,
+                onValueChange = { testSender = it },
+                label = { Text("Simulated Contact Name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = testMessage,
+                onValueChange = { testMessage = it },
+                label = { Text("Simulated WhatsApp Message") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = { onRunTest(testSender, testMessage) },
+                enabled = !uiState.isRunningReplyTest && testSender.isNotBlank() && testMessage.isNotBlank(),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("execute_reply_test_button")
+            ) {
+                if (uiState.isRunningReplyTest) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Executing Pipeline Audit...")
+                } else {
+                    Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("RUN REPLY TEST", fontWeight = FontWeight.Bold)
+                }
+            }
+
+            AnimatedVisibility(visible = uiState.replyTestResult != null) {
+                uiState.replyTestResult?.let { testResult ->
+                    Column(modifier = Modifier.padding(top = 16.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "Pipeline Execution Result",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = if (testResult.finalStatus == "SUCCESS") AlertGreen.copy(alpha = 0.15f) else AlertAmber.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = testResult.finalStatus,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (testResult.finalStatus == "SUCCESS") AlertGreen else AlertAmber,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        testResult.steps.forEach { step ->
+                            Card(
+                                shape = RoundedCornerShape(8.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (step.isSuccess) {
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                    } else {
+                                        AlertAmber.copy(alpha = 0.12f)
+                                    }
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.Top) {
+                                    Icon(
+                                        imageVector = if (step.isSuccess) Icons.Default.CheckCircle else Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = if (step.isSuccess) AlertGreen else AlertAmber,
+                                        modifier = Modifier
+                                            .size(18.dp)
+                                            .padding(top = 2.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Text(
+                                            text = step.stepName,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = step.details,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (!testResult.generatedReply.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Card(
+                                shape = RoundedCornerShape(10.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        text = "Generated Reply Output:",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "\"${testResult.generatedReply}\"",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

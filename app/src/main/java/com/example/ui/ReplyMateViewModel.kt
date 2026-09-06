@@ -56,7 +56,16 @@ data class ReplyMateUiState(
     val diagnosticEvents: List<DiagnosticLogEntry> = emptyList(),
     val whatsAppInstallStatus: WhatsAppInstallStatus = WhatsAppInstallStatus(false, false),
     val keyVerificationStatus: String? = null,
-    val isVerifyingKey: Boolean = false
+    val isVerifyingKey: Boolean = false,
+
+    // Real-time live status
+    val lastWhatsAppNotificationDetected: Boolean = false,
+    val lastSenderAvailable: Boolean = false,
+    val lastMessageTextAvailable: Boolean = false,
+    val lastReplyActionAvailable: Boolean = false,
+    val lastError: String? = null,
+    val replyTestResult: com.example.service.ReplyTestResult? = null,
+    val isRunningReplyTest: Boolean = false
 )
 
 class ReplyMateViewModel(application: Application) : AndroidViewModel(application) {
@@ -151,6 +160,37 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             ServiceDiagnostics.isServiceConnected.collect { connected ->
                 _uiState.update { it.copy(isServiceConnected = connected) }
+            }
+        }
+
+        // Collect real-time diagnostic flags
+        viewModelScope.launch {
+            ServiceDiagnostics.whatsappNotificationsCount.collect { count ->
+                _uiState.update { it.copy(lastWhatsAppNotificationDetected = count > 0) }
+            }
+        }
+
+        viewModelScope.launch {
+            ServiceDiagnostics.lastWhatsAppSender.collect { sender ->
+                _uiState.update { it.copy(lastSenderAvailable = !sender.isNullOrBlank()) }
+            }
+        }
+
+        viewModelScope.launch {
+            ServiceDiagnostics.lastMessageTextAvailable.collect { available ->
+                _uiState.update { it.copy(lastMessageTextAvailable = available) }
+            }
+        }
+
+        viewModelScope.launch {
+            ServiceDiagnostics.lastReplyActionAvailable.collect { available ->
+                _uiState.update { it.copy(lastReplyActionAvailable = available) }
+            }
+        }
+
+        viewModelScope.launch {
+            ServiceDiagnostics.lastError.collect { error ->
+                _uiState.update { it.copy(lastError = error) }
             }
         }
 
@@ -319,6 +359,24 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update { it.copy(diagnosticEvents = emptyList(), snackbarMessage = "Diagnostics log cleared") }
     }
 
+    fun runReplyTest(sender: String = "Test Contact", message: String = "Hello! Are you free for a quick chat?") {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isRunningReplyTest = true, replyTestResult = null) }
+            val result = DiagnosticRunner.runReplyTest(app, sender, message)
+            _uiState.update {
+                it.copy(
+                    isRunningReplyTest = false,
+                    replyTestResult = result,
+                    snackbarMessage = "Reply Test finished: ${result.finalStatus}"
+                )
+            }
+        }
+    }
+
+    fun clearReplyTestResult() {
+        _uiState.update { it.copy(replyTestResult = null) }
+    }
+
     // Contact Intelligence
     fun saveContactRule(rule: ContactRule) {
         prefRepo.saveContactRule(rule)
@@ -410,29 +468,37 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
                 senderName = pending.senderName
             )
 
-            val status = if (sent) PendingReplyEntity.STATUS_SENT else "SENT_OFFLINE"
+            val status = if (sent) PendingReplyEntity.STATUS_SENT else "SENT_FAILED"
             db.pendingReplyDao().updateStatus(pending.id, status)
+
+            if (sent) {
+                app.messageFilter.recordSuccessfulReply(pending.conversationKey)
+                app.messageFilter.incrementConsecutiveReplies(pending.conversationKey)
+            }
 
             db.replyLogDao().insert(
                 ReplyLogEntity(
                     senderName = pending.senderName,
                     incomingMessage = pending.incomingMessage,
-                    replyText = pending.suggestedReply,
+                    replyText = if (sent) "Auto-reply sent to ${pending.senderName}: ${pending.suggestedReply}"
+                    else "Failed to send reply via WhatsApp notification: Reply action expired",
                     timestamp = System.currentTimeMillis(),
-                    status = if (sent) ReplyLogEntity.STATUS_MANUAL_SENT else ReplyLogEntity.STATUS_NO_ACTION,
+                    status = if (sent) ReplyLogEntity.STATUS_MANUAL_SENT else ReplyLogEntity.STATUS_FAILED,
                     provider = pending.providerUsed
                 )
             )
 
-            db.conversationMessageDao().insert(
-                ConversationMessageEntity(
-                    conversationKey = pending.conversationKey,
-                    sender = "Me (AI)",
-                    messageText = pending.suggestedReply,
-                    isFromMe = true,
-                    timestamp = System.currentTimeMillis()
+            if (sent) {
+                db.conversationMessageDao().insert(
+                    ConversationMessageEntity(
+                        conversationKey = pending.conversationKey,
+                        sender = "Me (AI)",
+                        messageText = pending.suggestedReply,
+                        isFromMe = true,
+                        timestamp = System.currentTimeMillis()
+                    )
                 )
-            )
+            }
 
             _uiState.update {
                 it.copy(
@@ -455,34 +521,42 @@ class ReplyMateViewModel(application: Application) : AndroidViewModel(applicatio
             db.pendingReplyDao().updateReplyText(
                 id = pending.id,
                 newReply = editedReply,
-                status = PendingReplyEntity.STATUS_EDITED
+                status = if (sent) PendingReplyEntity.STATUS_EDITED else "EDIT_FAILED"
             )
+
+            if (sent) {
+                app.messageFilter.recordSuccessfulReply(pending.conversationKey)
+                app.messageFilter.incrementConsecutiveReplies(pending.conversationKey)
+            }
 
             db.replyLogDao().insert(
                 ReplyLogEntity(
                     senderName = pending.senderName,
                     incomingMessage = pending.incomingMessage,
-                    replyText = editedReply,
+                    replyText = if (sent) "Auto-reply sent to ${pending.senderName}: $editedReply"
+                    else "Failed to send reply via WhatsApp notification: Reply action expired",
                     timestamp = System.currentTimeMillis(),
-                    status = if (sent) ReplyLogEntity.STATUS_MANUAL_SENT else ReplyLogEntity.STATUS_NO_ACTION,
+                    status = if (sent) ReplyLogEntity.STATUS_MANUAL_SENT else ReplyLogEntity.STATUS_FAILED,
                     provider = pending.providerUsed
                 )
             )
 
-            db.conversationMessageDao().insert(
-                ConversationMessageEntity(
-                    conversationKey = pending.conversationKey,
-                    sender = "Me (Edited)",
-                    messageText = editedReply,
-                    isFromMe = true,
-                    timestamp = System.currentTimeMillis()
+            if (sent) {
+                db.conversationMessageDao().insert(
+                    ConversationMessageEntity(
+                        conversationKey = pending.conversationKey,
+                        sender = "Me (AI)",
+                        messageText = editedReply,
+                        isFromMe = true,
+                        timestamp = System.currentTimeMillis()
+                    )
                 )
-            )
+            }
 
             _uiState.update {
                 it.copy(
                     snackbarMessage = if (sent) "Edited reply sent to ${pending.senderName}"
-                    else "Reply action expired in notification shade"
+                    else "Reply action expired in notification shade (WhatsApp notification dismissed)"
                 )
             }
         }
