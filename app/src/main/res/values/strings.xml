@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">ReplyMate</string>
+    <string name="notification_service_label">ReplyMate Notification Listener</string>
+    <string name="notification_service_desc">Enables ReplyMate to read WhatsApp notifications and send AI-assisted replies</string>
+</resources>

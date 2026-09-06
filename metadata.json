@@ -1,0 +1,6 @@
+{
+  "name": "ReplyMate",
+  "description": "Personal AI WhatsApp auto-reply assistant with notification access, smart filters, and approval mode",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
